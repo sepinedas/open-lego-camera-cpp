@@ -11,12 +11,22 @@ namespace {
 constexpr double kMaxZoom = 4.0;
 constexpr double kZoomStep = 1.25; // multiplicative per tap
 
-// GStreamer pipeline that pulls frames from the Pi camera through libcamera
-// (Raspberry Pi OS Bookworm) and hands OpenCV plain BGR.
-std::string picamPipeline(int w, int h) {
-    return "libcamerasrc ! video/x-raw,width=" + std::to_string(w) +
-           ",height=" + std::to_string(h) +
-           " ! videoconvert ! video/x-raw,format=BGR ! appsink drop=true max-buffers=2";
+// GStreamer pipeline that pulls frames from a Pi camera through libcamera and
+// hands OpenCV plain BGR.
+//
+// The source caps MUST pin a *processed* pixel format (NV12/YUV420/RGBx). If
+// they don't, libcamerasrc may negotiate the sensor's native Bayer stream
+// (e.g. the IMX500's 2028x1520-SRGGB16/RAW), which videoconvert can't consume,
+// and the pipeline fails to start. `format` forces the ISP-processed output.
+// `name` optionally selects one camera by its libcamera id when several exist.
+std::string picamPipeline(const std::string& format, int w, int h,
+                          const std::string& name) {
+    std::string src = "libcamerasrc";
+    if (!name.empty()) src += " camera-name=\"" + name + "\"";
+    return src + " ! video/x-raw,format=" + format +
+           ",width=" + std::to_string(w) + ",height=" + std::to_string(h) +
+           " ! videoconvert ! video/x-raw,format=BGR"
+           " ! appsink drop=true max-buffers=2";
 }
 
 // Try one V4L2 index; returns true and leaves `cap` open on success.
@@ -39,15 +49,23 @@ std::unique_ptr<Camera> Camera::open(const Config& cfg) {
     std::unique_ptr<Camera> cam(new Camera());
 
     auto openPi = [&]() -> bool {
-        if (!cam->cap_.open(picamPipeline(cfg.width, cfg.height), cv::CAP_GSTREAMER))
-            return false;
-        cv::Mat probe;
-        if (!cam->cap_.read(probe) || probe.empty()) {
+        // Different sensors/ISPs expose different processed formats; try the
+        // common ones in turn and keep the first that actually delivers a frame.
+        static const char* kFormats[] = {"NV12", "YUV420", "RGBx", "BGRx", "RGB"};
+        for (const char* fmt : kFormats) {
+            std::string pipe = picamPipeline(fmt, cfg.width, cfg.height, cfg.picamName);
+            if (!cam->cap_.open(pipe, cv::CAP_GSTREAMER)) continue;
+            cv::Mat probe;
+            if (cam->cap_.read(probe) && !probe.empty()) {
+                cam->desc_ = std::string("Pi camera (libcamera, ") + fmt + ")";
+                return true;
+            }
             cam->cap_.release();
-            return false;
+            std::cerr << "picam: format " << fmt << " did not start; trying next\n";
         }
-        cam->desc_ = "Pi camera (libcamera)";
-        return true;
+        std::cerr << "picam: no libcamera format worked. Check `rpicam-hello` "
+                     "and `gst-inspect-1.0 libcamerasrc`.\n";
+        return false;
     };
 
     auto openWebcam = [&]() -> bool {

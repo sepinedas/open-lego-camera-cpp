@@ -22,6 +22,8 @@ static void printUsage(const char* prog) {
         "  --output-dir DIR             where captures are saved\n"
         "                               (default: ~/Pictures/open-lego-camera)\n"
         "  --webcam-index N             force /dev/videoN for a USB webcam\n"
+        "  --picam-name NAME            libcamera camera id to select (see\n"
+        "                               `rpicam-hello --list-cameras`)\n"
         "  --size WxH                   requested preview size (default: 1280x720)\n"
         "  --driver NAME                force SDL video driver (kmsdrm, fbcon, x11)\n"
         "  --windowed                   run in a window instead of fullscreen\n"
@@ -72,6 +74,9 @@ bool parseArgs(int argc, char** argv, Config& out, int* exitCode) {
         } else if (a == "--webcam-index") {
             const char* v = need(i); if (!v) return false;
             out.webcamIndex = std::atoi(v);
+        } else if (a == "--picam-name") {
+            const char* v = need(i); if (!v) return false;
+            out.picamName = v;
         } else if (a == "--size") {
             const char* v = need(i); if (!v) return false;
             if (!parseSize(v, out.width, out.height)) {

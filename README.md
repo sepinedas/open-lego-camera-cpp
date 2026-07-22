@@ -61,6 +61,33 @@ sudo apt install gstreamer1.0-libcamera gstreamer1.0-plugins-good \
 (A USB webcam needs none of the GStreamer/libcamera packages — it goes
 through V4L2 directly.)
 
+### Pi camera notes (including the IMX500 AI camera)
+
+The libcamera GStreamer source is asked for a **processed** pixel format
+(`NV12`, then `YUV420`/`RGBx`/`BGRx`/`RGB` as fallbacks). This matters on
+sensors like the Sony **IMX500 AI camera**: if the format isn't pinned,
+libcamerasrc negotiates the sensor's native Bayer stream
+(`2028x1520-SRGGB16/RAW`), which the pipeline can't convert, and it fails to
+start. Pinning a processed format avoids that.
+
+If you have **more than one camera** (e.g. the IMX500 *and* a USB webcam),
+`--camera auto` tries the first libcamera camera before falling back to a
+webcam. Force a source explicitly with `--camera picam` / `--camera webcam`,
+and pick a specific libcamera camera with `--picam-name` — list the ids with:
+
+```sh
+rpicam-hello --list-cameras
+```
+
+Sanity-check the raw pipeline outside the app with:
+
+```sh
+gst-launch-1.0 libcamerasrc ! video/x-raw,format=NV12,width=1280,height=720 \
+  ! videoconvert ! autovideosink
+```
+
+If that shows a picture, the app will too.
+
 ## Build
 
 ```sh
