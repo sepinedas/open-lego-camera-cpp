@@ -17,6 +17,9 @@ A touch-friendly, **icon-only** camera app for the **Raspberry Pi Zero 2 W**
   `ffmpeg`); disable with `--no-audio`.
 - Built-in **gallery**: browse captured photos and videos, **play** videos
   back, and **delete** them behind an icon-only ✓ / ✗ confirmation.
+- Optional **dog face AR filter**: smooth **3D** ears, muzzle, nose and a
+  tongue (that lolls when you open your mouth), mapped onto face-mesh landmarks
+  and tracking head pose in 3D — see [Dog face filter](#dog-face-filter-ar).
 
 ![UI mockup](docs/ui-mockup.png)
 
@@ -356,6 +359,53 @@ line.
 | triangle-in-ring (gallery) | play the selected video |
 | trash can (gallery) | delete the shown item (asks ✓ / ✗) |
 | ✓ green / ✗ red | confirm / cancel a delete |
+| dog face | toggle the dog AR filter (green ring when on) |
+
+## Dog face filter (AR)
+
+A WhatsApp/Snapchat-style dog filter built from **real-time 3D assets** —
+floppy ears, a protruding muzzle, a black nose and a tongue — **not 2D
+sprites**. They are smooth shaded meshes mapped onto the face-mesh landmarks and
+oriented by the head pose, so they turn with your head in 3D. The tongue drops
+and lengthens as you open your mouth. Photos and videos capture the filter, just
+like the phone apps.
+
+![Dog filter](docs/dog-filter.png)
+
+> Rendered by `tools/filter_mockup.cpp` at four head poses using the real
+> filter code (the face is a placeholder sketch).
+
+**How it works**
+
+1. **Landmarks** — a Haar detector finds the face, then OpenCV's `FacemarkLBF`
+   fits 68 facial landmarks (the "face mesh").
+2. **Head pose** — `solvePnP` against a canonical 3D face model recovers the
+   head's rotation and translation.
+3. **3D assets** — the ears/muzzle/nose/tongue are procedurally-generated smooth
+   ellipsoids with per-vertex normals, positioned in a face-local frame and
+   transformed by the head pose.
+4. **Render** — a small software rasterizer (perspective projection, z-buffer,
+   Lambert shading) composites the lit meshes onto each frame. No OpenGL context
+   is needed, so it slots into the existing SDL/OpenCV pipeline and works
+   headless.
+
+**Setup** — the Haar cascade ships with `libopencv-dev`; you only need to fetch
+the landmark model (~54 MB) once:
+
+```sh
+scripts/get-models.sh          # downloads models/lbfmodel.yaml
+build/open-lego-camera --filter    # or tap the dog icon in the menu
+```
+
+The model is searched for at `--face-model`, then `./models/lbfmodel.yaml`,
+`~/.local/share/open-lego-camera/lbfmodel.yaml`, and
+`/usr/share/open-lego-camera/`. If it isn't found the app still runs — the
+filter just draws nothing and prints where to get the model.
+
+> **Performance:** landmark fitting is the expensive part. It's comfortable on a
+> Pi 5, but heavy on a Pi Zero 2 W — the app re-tracks every other frame and
+> renders the assets at the latest pose in between. Use a smaller `--size` (e.g.
+> `--size 640x480`) on the Zero 2 W.
 
 ## Audio
 

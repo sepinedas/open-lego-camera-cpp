@@ -1,5 +1,6 @@
 #include "icons.hpp"
 
+#include <algorithm>
 #include <cmath>
 
 #include <SDL2/SDL2_gfxPrimitives.h>
@@ -118,6 +119,23 @@ void iconCross(SDL_Renderer* r, int cx, int cy, int rad, Uint8 a) {
     thickLineRGBA(r, cx + s, cy - s, cx - s, cy + s, 5, 235, 80, 80, a);
 }
 
+// Dog face: round head, two floppy ears, a nose dot -- the filter toggle.
+void iconDog(SDL_Renderer* r, int cx, int cy, int rad, Uint8 a) {
+    Uint8 c = mod(kFg, a);
+    int hr = (int)(rad * 0.55);           // head radius
+    // Floppy ears (filled triangles) on either side, hanging down.
+    int ex = (int)(rad * 0.7), ey = (int)(rad * 0.55);
+    filledTrigonRGBA(r, cx - ex, cy - ey, cx - (int)(rad * 0.25), cy - ey / 2,
+                     cx - (int)(rad * 0.35), cy + ey, c, c, c, a);
+    filledTrigonRGBA(r, cx + ex, cy - ey, cx + (int)(rad * 0.25), cy - ey / 2,
+                     cx + (int)(rad * 0.35), cy + ey, c, c, c, a);
+    ring(r, cx, cy, hr, 3, c, c, c, a);   // head outline
+    // Eyes + nose.
+    filledCircleRGBA(r, cx - hr / 3, cy - hr / 5, std::max(1, rad / 12), c, c, c, a);
+    filledCircleRGBA(r, cx + hr / 3, cy - hr / 5, std::max(1, rad / 12), c, c, c, a);
+    filledCircleRGBA(r, cx, cy + hr / 3, std::max(2, rad / 8), c, c, c, a);
+}
+
 } // namespace
 
 void drawIcon(SDL_Renderer* ren, Action action, int cx, int cy, int r,
@@ -135,6 +153,7 @@ void drawIcon(SDL_Renderer* ren, Action action, int cx, int cy, int r,
         case Action::Delete:      iconTrash(ren, cx, cy, r, alpha); break;
         case Action::ConfirmYes:  iconCheck(ren, cx, cy, r, alpha); break;
         case Action::ConfirmNo:   iconCross(ren, cx, cy, r, alpha); break;
+        case Action::ToggleFilter: iconDog(ren, cx, cy, r, alpha); break;
         default: break;
     }
 }

@@ -218,7 +218,25 @@ bool App::init(const Config& cfg) {
 
     gallery_ = std::make_unique<Gallery>(cfg_.outputDir);
     menu_.wake();
+    if (cfg_.filter) toggleFilter(); // start with the filter on if requested
     return true;
+}
+
+// Load the Haar cascade + LBF landmark model and build the dog assets, once.
+void App::ensureFilter() {
+    if (filterInit_) return;
+    filterInit_ = true;
+    faceTracker_.init(cfg_.cascade, cfg_.faceModel);
+    dogFilter_ = std::make_unique<DogFilter>();
+}
+
+void App::toggleFilter() {
+    ensureFilter();
+    filterOn_ = !filterOn_;
+    if (filterOn_ && !faceTracker_.available())
+        std::cerr << "filter: enabled but no landmark model loaded -- nothing "
+                     "will be drawn (see scripts/get-models.sh)\n";
+    std::cout << "filter: " << (filterOn_ ? "on" : "off") << "\n";
 }
 
 std::string App::timestampName(const char* prefix, const char* ext) const {
@@ -328,6 +346,7 @@ void App::dispatch(Action a) {
         case Action::ConfirmNo:
             mode_ = Mode::Gallery;
             break;
+        case Action::ToggleFilter: toggleFilter(); break;
         case Action::Quit:
             running_ = false;
             break;
@@ -399,6 +418,16 @@ void App::renderCamera() {
     cv::Mat frame;
     if (cam_->read(frame)) lastFrame_ = frame;
 
+    // Dog face filter: mutate the frame in place so photos and videos capture
+    // it too. Re-track every few frames for speed; render at the latest pose
+    // each frame.
+    if (filterOn_ && faceTracker_.available() && !lastFrame_.empty()) {
+        if (frames_++ % kTrackEvery == 0 || landmarks_.empty())
+            haveFace_ = faceTracker_.track(lastFrame_, landmarks_);
+        if (haveFace_ && !landmarks_.empty())
+            dogFilter_->apply(lastFrame_, landmarks_);
+    }
+
     if (recorder_.recording()) recorder_.writeFrame(lastFrame_);
 
     beginFrame();
@@ -413,8 +442,12 @@ void App::renderCamera() {
     if (menu_.awake()) {
         Uint8 a = menu_.alpha();
         auto btns = menu_.layout(Mode::Camera, viewW_, viewH_, false);
-        for (const auto& b : btns)
+        for (const auto& b : btns) {
             Menu::drawButton(ren_, b, a, recorder_.recording());
+            // Accent ring on the filter button while the filter is active.
+            if (b.action == Action::ToggleFilter && filterOn_)
+                aacircleRGBA(ren_, b.cx, b.cy, b.r - 1, 90, 210, 110, a);
+        }
     }
     present();
 }

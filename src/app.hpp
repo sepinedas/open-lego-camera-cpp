@@ -6,8 +6,13 @@
 #include <SDL2/SDL.h>
 #include <opencv2/core.hpp>
 
+#include <memory>
+#include <vector>
+
 #include "camera.hpp"
 #include "config.hpp"
+#include "dogfilter.hpp"
+#include "facetracker.hpp"
 #include "gallery.hpp"
 #include "recorder.hpp"
 #include "types.hpp"
@@ -50,6 +55,8 @@ private:
     // --- actions ---
     void capturePhoto();
     void toggleRecording();
+    void toggleFilter();
+    void ensureFilter();   // lazily load the face model on first use
     void playCurrentVideo();
 
     // --- per-mode rendering ---
@@ -79,6 +86,16 @@ private:
     cv::Mat lastFrame_;        // most recent live frame (source for photos)
     cv::Mat galleryMat_;       // decoded image/thumbnail currently shown
     std::string galleryShown_; // path backing galleryMat_
+
+    // Dog face filter (lazily initialised on first enable).
+    FaceTracker faceTracker_;
+    std::unique_ptr<DogFilter> dogFilter_;
+    std::vector<cv::Point2f> landmarks_;
+    bool filterOn_ = false;
+    bool filterInit_ = false;
+    bool haveFace_ = false;
+    unsigned frames_ = 0;
+    static constexpr unsigned kTrackEvery = 2; // re-track every N frames
 };
 
 } // namespace olc

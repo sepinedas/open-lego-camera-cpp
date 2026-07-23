@@ -12,8 +12,11 @@ endif()
 # --- Dependencies -----------------------------------------------------------
 # SDL2 draws to HDMI via the KMSDRM driver on a headless Pi (no X11 needed).
 find_package(SDL2 REQUIRED)
-# OpenCV handles V4L2/GStreamer capture, JPEG/H.264 I/O and video playback.
-find_package(OpenCV REQUIRED COMPONENTS core imgproc imgcodecs videoio)
+# OpenCV handles V4L2/GStreamer capture, JPEG/H.264 I/O and video playback, plus
+# face landmarks (face), head pose (calib3d) and detection (objdetect) for the
+# dog filter.
+find_package(OpenCV REQUIRED COMPONENTS core imgproc imgcodecs videoio
+             calib3d objdetect face)
 
 # SDL2_gfx (icon primitives) has no CMake config on most distros -> pkg-config.
 find_package(PkgConfig REQUIRED)
@@ -27,6 +30,9 @@ add_executable(open-lego-camera
   src/gallery.cpp
   src/icons.cpp
   src/ui.cpp
+  src/mesh3d.cpp
+  src/facetracker.cpp
+  src/dogfilter.cpp
   src/app.cpp
 )
 

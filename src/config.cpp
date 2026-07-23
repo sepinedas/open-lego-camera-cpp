@@ -35,6 +35,10 @@ static void printUsage(const char* prog) {
         "  --driver NAME                force SDL video driver (kmsdrm, fbcon, x11)\n"
         "  --windowed                   run in a window instead of fullscreen\n"
         "  --no-audio                   record video without sound\n"
+        "  --filter                     start with the dog face filter on\n"
+        "  --face-model PATH            LBF landmark model (default: ./models or\n"
+        "                               fetch with scripts/get-models.sh)\n"
+        "  --cascade PATH               Haar face cascade (default: OpenCV data)\n"
         "  --help                       show this help\n";
 }
 
@@ -116,6 +120,14 @@ bool parseArgs(int argc, char** argv, Config& out, int* exitCode) {
             out.windowed = true;
         } else if (a == "--no-audio") {
             out.audio = false;
+        } else if (a == "--filter") {
+            out.filter = true;
+        } else if (a == "--face-model") {
+            const char* v = need(i); if (!v) return false;
+            out.faceModel = v;
+        } else if (a == "--cascade") {
+            const char* v = need(i); if (!v) return false;
+            out.cascade = v;
         } else {
             std::cerr << "unknown option: " << a << " (try --help)\n";
             *exitCode = 2;

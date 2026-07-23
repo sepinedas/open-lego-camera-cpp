@@ -27,6 +27,7 @@ enum class Action {
     Delete,      // ask to delete the selected item
     ConfirmYes,  // confirm deletion
     ConfirmNo,   // cancel deletion
+    ToggleFilter,// turn the dog face filter on/off
     Quit,
 };
 

@@ -53,7 +53,8 @@ std::vector<Button> Menu::layout(Mode mode, int sw, int sh, bool hasVideo) const
     switch (mode) {
         case Mode::Camera:
             return row({Action::OpenGallery, Action::ZoomOut, Action::Shutter,
-                        Action::ZoomIn, Action::Record}, sw, sh);
+                        Action::ZoomIn, Action::Record, Action::ToggleFilter},
+                       sw, sh);
         case Mode::Gallery: {
             std::vector<Action> a = {Action::Back, Action::Prev};
             if (hasVideo) a.push_back(Action::Play);

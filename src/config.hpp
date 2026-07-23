@@ -21,6 +21,9 @@ struct Config {
     bool touchFlipY = false; // mirror touch vertically
     int width = 1280;        // requested preview width
     int height = 720;        // requested preview height
+    bool filter = false;     // start with the dog face filter enabled
+    std::string faceModel;   // path to the LBF landmark model (lbfmodel.yaml)
+    std::string cascade;     // path to the Haar face cascade
 };
 
 // Parse argv. Returns false and prints usage on --help or a bad flag; sets
