@@ -17,9 +17,10 @@ A touch-friendly, **icon-only** camera app for the **Raspberry Pi Zero 2 W**
   `ffmpeg`); disable with `--no-audio`.
 - Built-in **gallery**: browse captured photos and videos, **play** videos
   back, and **delete** them behind an icon-only ✓ / ✗ confirmation.
-- Optional **dog face AR filter**: smooth **3D** ears, muzzle, nose and a
-  tongue (that lolls when you open your mouth), mapped onto face-mesh landmarks
-  and tracking head pose in 3D — see [Dog face filter](#dog-face-filter-ar).
+- Optional **dog face AR filter**: smooth **3D** folded ears, muzzle, nose,
+  whiskers and a tongue (that lolls when you open your mouth), mapped onto
+  face-mesh landmarks and tracking head pose in 3D — see
+  [Dog face filter](#dog-face-filter-ar).
 
 ![UI mockup](docs/ui-mockup.png)
 
@@ -364,7 +365,7 @@ line.
 ## Dog face filter (AR)
 
 A WhatsApp/Snapchat-style dog filter built from **real-time 3D assets** —
-floppy ears, a protruding muzzle, a black nose and a tongue — **not 2D
+folded ears, a protruding muzzle, a black nose, whiskers and a tongue — **not 2D
 sprites**. They are smooth shaded meshes mapped onto the face-mesh landmarks and
 oriented by the head pose, so they turn with your head in 3D. The tongue drops
 and lengthens as you open your mouth. Photos and videos capture the filter, just
@@ -384,9 +385,11 @@ like the phone apps.
    mesh"). Between detector runs the fit is seeded from the *previous frame's*
    landmark box, which tracks head turns far more smoothly than re-detecting
    each frame.
-3. **Smoothing** — a **one-euro filter** on the landmarks removes the frame-to-
-   frame jitter that otherwise makes the assets shake, while keeping latency low
-   when you actually move.
+3. **Smoothing** — a **one-euro filter** on the landmarks *and* an additional
+   smoothing pass on the recovered head pose (rotation + translation) remove the
+   frame-to-frame jitter that otherwise makes the assets shake, while keeping
+   latency low when you actually move. Both snap (rather than lag) on
+   re-acquisition.
 4. **Head pose** — `solvePnP` against a canonical 3D face model recovers the
    head's rotation and translation.
 5. **3D assets** — the ears/muzzle/nose/tongue are procedurally-generated smooth

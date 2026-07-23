@@ -42,11 +42,19 @@ private:
 
     static double mouthOpen(const std::vector<cv::Point2f>& lm);
 
+    // Temporally smooth the head pose (Rodrigues rotation + translation) on top
+    // of the tracker's landmark smoothing, snapping instead of blending on a
+    // large jump (re-acquisition).
+    void smoothPose(cv::Vec3d& rvec, cv::Vec3d& tvec);
+
     std::vector<Part> parts_;
     size_t tongueIdx_ = 0; // parts_ index of the tongue (animated per frame)
     cv::Vec3d tongueBase_;
     cv::Mat zbuf_;
     Light light_;
+
+    bool hasPose_ = false;
+    cv::Vec3d prevRvec_, prevTvec_;
 };
 
 } // namespace olc
