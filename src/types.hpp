@@ -27,7 +27,17 @@ enum class Action {
     Delete,      // ask to delete the selected item
     ConfirmYes,  // confirm deletion
     ConfirmNo,   // cancel deletion
+    CycleFilter, // cycle the live facial-expression filter
     Quit,
+};
+
+// Live facial-expression filter applied to the camera preview (and captures).
+// The face is reshaped in place rather than having graphics drawn over it; only
+// the crying filter's tears are drawn on top.
+enum class Filter {
+    None,
+    BigSmile, // mouth stretched into a wide grin; teeth pop when it opens
+    Crying,   // mouth/brows pulled into a frown, with falling tears
 };
 
 } // namespace olc

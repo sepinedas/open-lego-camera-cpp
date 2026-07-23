@@ -35,6 +35,8 @@ static void printUsage(const char* prog) {
         "  --driver NAME                force SDL video driver (kmsdrm, fbcon, x11)\n"
         "  --windowed                   run in a window instead of fullscreen\n"
         "  --no-audio                   record video without sound\n"
+        "  --face-cascade PATH          Haar face-cascade XML for the facial\n"
+        "                               filters (default: system opencv-data)\n"
         "  --help                       show this help\n";
 }
 
@@ -116,6 +118,9 @@ bool parseArgs(int argc, char** argv, Config& out, int* exitCode) {
             out.windowed = true;
         } else if (a == "--no-audio") {
             out.audio = false;
+        } else if (a == "--face-cascade") {
+            const char* v = need(i); if (!v) return false;
+            out.faceCascade = v;
         } else {
             std::cerr << "unknown option: " << a << " (try --help)\n";
             *exitCode = 2;

@@ -1,5 +1,6 @@
 #include "icons.hpp"
 
+#include <algorithm>
 #include <cmath>
 
 #include <SDL2/SDL2_gfxPrimitives.h>
@@ -106,6 +107,28 @@ void iconTrash(SDL_Renderer* r, int cx, int cy, int rad, Uint8 a) {
         thickLineRGBA(r, cx + i * (w / 2), top + 9, cx + i * (w / 2), bot - 4, 2, c, c, c, a);
 }
 
+// Smiley face: the live facial-filter (cycle) button.
+void iconFilter(SDL_Renderer* r, int cx, int cy, int rad, Uint8 a) {
+    Uint8 c = mod(kFg, a);
+    ring(r, cx, cy, rad, 3, c, c, c, a);
+    int eo = (int)(rad * 0.34), ey = cy - (int)(rad * 0.20);
+    int er = std::max(2, (int)(rad * 0.12));
+    filledCircleRGBA(r, cx - eo, ey, er, c, c, c, a);
+    filledCircleRGBA(r, cx + eo, ey, er, c, c, c, a);
+    // Upturned smile: an arc approximated by short chords across the lower face.
+    int sr = (int)(rad * 0.5);
+    int scy = cy - (int)(rad * 0.10);
+    int px = cx - sr, py = scy;
+    for (int deg = 20; deg <= 160; deg += 20) {
+        double t = deg * 3.14159265358979 / 180.0;
+        int nx = cx + (int)(sr * -std::cos(t));
+        int ny = scy + (int)(sr * std::sin(t) * 0.85);
+        thickLineRGBA(r, px, py, nx, ny, 3, c, c, c, a);
+        px = nx;
+        py = ny;
+    }
+}
+
 void iconCheck(SDL_Renderer* r, int cx, int cy, int rad, Uint8 a) {
     int s = (int)(rad * 0.55);
     thickLineRGBA(r, cx - s, cy, cx - s / 4, cy + s, 5, 90, 210, 110, a);
@@ -135,6 +158,7 @@ void drawIcon(SDL_Renderer* ren, Action action, int cx, int cy, int r,
         case Action::Delete:      iconTrash(ren, cx, cy, r, alpha); break;
         case Action::ConfirmYes:  iconCheck(ren, cx, cy, r, alpha); break;
         case Action::ConfirmNo:   iconCross(ren, cx, cy, r, alpha); break;
+        case Action::CycleFilter: iconFilter(ren, cx, cy, r, alpha); break;
         default: break;
     }
 }

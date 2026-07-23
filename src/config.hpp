@@ -21,6 +21,7 @@ struct Config {
     bool touchFlipY = false; // mirror touch vertically
     int width = 1280;        // requested preview width
     int height = 720;        // requested preview height
+    std::string faceCascade; // override path to the Haar face cascade XML
 };
 
 // Parse argv. Returns false and prints usage on --help or a bad flag; sets

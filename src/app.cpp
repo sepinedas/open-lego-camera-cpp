@@ -354,6 +354,10 @@ bool App::init(const Config& cfg) {
               << "x" << cam_->height() << " @ " << cam_->fps() << "fps\n";
 
     gallery_ = std::make_unique<Gallery>(cfg_.outputDir);
+    if (!cfg_.faceCascade.empty()) faceFilter_.setCascade(cfg_.faceCascade);
+    if (!faceFilter_.ready())
+        std::cerr << "filters: no face cascade found; facial filters disabled "
+                     "(install `opencv-data` or pass --face-cascade)\n";
     refreshThumbnail();
     menu_.wake();
     return true;
@@ -528,6 +532,10 @@ void App::dispatch(Action a) {
         case Action::ConfirmNo:
             mode_ = Mode::Gallery;
             break;
+        case Action::CycleFilter:
+            filter_ = nextFilter(filter_);
+            filterLabelUntil_ = SDL_GetTicks() + 1500;
+            break;
         case Action::Quit:
             running_ = false;
             break;
@@ -600,7 +608,13 @@ void App::playCurrentVideo() {
 
 void App::renderCamera() {
     cv::Mat frame;
-    if (cam_->read(frame)) lastFrame_ = frame;
+    if (cam_->read(frame)) {
+        // Reshape the live face before it becomes the frame we preview, capture
+        // and record, so photos and videos carry the same expression.
+        faceFilter_.apply(frame, filter_, filterPhase_);
+        lastFrame_ = frame;
+    }
+    if (filter_ != Filter::None) filterPhase_ += 1.0;
 
     if (recorder_.recording()) recorder_.writeFrame(lastFrame_);
 
@@ -637,6 +651,19 @@ void App::renderCamera() {
                        viewW_ / 2 + tw / 2 + pad, 12 + 8 * scale + pad,
                        6, 0, 0, 0, 110);
         drawText(viewW_ / 2, 12 + pad / 2, buf, scale, {255, 255, 255, 235}, true);
+    }
+
+    // Active filter name, shown briefly after tapping the smiley button.
+    if (now < filterLabelUntil_) {
+        std::string name = filterName(filter_);
+        int scale = std::max(2, viewH_ / 200);
+        int tw = 8 * (int)name.size() * scale;
+        int pad = 8 * scale / 2;
+        int y = viewH_ / 6;
+        roundedBoxRGBA(ren_, viewW_ / 2 - tw / 2 - pad, y,
+                       viewW_ / 2 + tw / 2 + pad, y + 8 * scale + pad,
+                       6, 0, 0, 0, 120);
+        drawText(viewW_ / 2, y + pad / 2, name, scale, {255, 255, 255, 240}, true);
     }
 
     // Shutter flash: a quick white wash that fades out after a capture.

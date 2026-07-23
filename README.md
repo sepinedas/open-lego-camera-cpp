@@ -21,6 +21,12 @@ A touch-friendly, **icon-only** camera app for the **Raspberry Pi Zero 2 W**
 - Built-in **gallery**: browse captured photos and videos, **play** videos
   back, and **delete** them behind an icon-only ✓ / ✗ confirmation. The
   capture **date & time** is shown translucent across the top.
+- **WhatsApp-style facial filters** (smiley button): a **Big Smile** that
+  stretches your mouth into a wide grin — with your teeth brightening as you
+  open it — and a **Crying** face that pulls your mouth and brows into a frown
+  and adds animated falling **tears**. The face is *reshaped in place* (its own
+  pixels warped), not covered with cartoon graphics — only the tears are drawn
+  on top. Applies live to the preview and to captured photos/videos.
 
 ![UI mockup](docs/ui-mockup.png)
 
@@ -37,6 +43,7 @@ A touch-friendly, **icon-only** camera app for the **Raspberry Pi Zero 2 W**
 | Photos, video **with audio**, zoom, gallery, delete | shutter / record / gallery icons; pinch-to-zoom; `arecord`+`ffmpeg` mux audio |
 | Icon-only buttons, no text | all icons are drawn as vector shapes (`icons.cpp`, SDL2_gfx) |
 | Headless — no X11 / window manager | SDL2 `kmsdrm`/`fbcon` renders directly to HDMI |
+| WhatsApp-style facial filters | `FaceFilter` finds the face (Haar cascade) and warps the mouth/brows with `cv::remap`; the crying filter also draws tears (`filters.cpp`) |
 
 ## Dependencies
 
@@ -53,6 +60,18 @@ Optional, for **video sound**: `ffmpeg` (muxing) and `alsa-utils` (`arecord`):
 ```sh
 sudo apt install ffmpeg alsa-utils
 ```
+
+The **facial filters** need OpenCV's `objdetect` module (part of `libopencv-dev`
+above) and its bundled Haar cascades, which Debian/Raspberry Pi OS ship in the
+`opencv-data` package:
+
+```sh
+sudo apt install opencv-data
+```
+
+If the cascade lives somewhere non-standard, point the app at it with
+`--face-cascade /path/to/haarcascade_frontalface_default.xml`. Without a
+cascade the app still runs — the facial filters simply stay inactive.
 
 For the **Pi camera module** you also need the libcamera GStreamer element,
 which is what lets OpenCV open the camera without a desktop:
@@ -119,8 +138,27 @@ build/open-lego-camera [options]
   --driver NAME                force SDL video driver (kmsdrm, fbcon, x11)
   --windowed                   run in a window instead of fullscreen
   --no-audio                   record video without sound
+  --face-cascade PATH          Haar face-cascade XML for the facial filters
   --help                       show this help
 ```
+
+### Facial filters
+
+Tap the **smiley** button (bottom-left in the camera view) to cycle the live
+facial filter: **Big Smile** → **Crying** → off. The active filter's name
+appears briefly on screen, and the effect is baked into any photo or video you
+then capture.
+
+- **Big Smile** stretches your mouth's corners up and out into a wide grin and
+  opens it vertically; the more you open your mouth, the more your teeth are
+  brightened, so they "pop".
+- **Crying** curls your mouth down into a frown, pinches your inner brows down,
+  and streams animated tears down your cheeks.
+
+Both filters *warp your actual face* — no cartoon mouth or eyes are pasted on
+top; only the crying tears are drawn over the image. Faces are found with a
+stock OpenCV Haar cascade, so no landmark model or `opencv_contrib` build is
+required — keeping it light enough for the Pi Zero 2 W.
 
 ### Rotating the display
 

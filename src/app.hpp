@@ -9,6 +9,7 @@
 
 #include "camera.hpp"
 #include "config.hpp"
+#include "filters.hpp"
 #include "gallery.hpp"
 #include "recorder.hpp"
 #include "types.hpp"
@@ -76,6 +77,7 @@ private:
     std::unique_ptr<Gallery> gallery_;
     Recorder recorder_;
     Menu menu_;
+    FaceFilter faceFilter_;
 
     SDL_Window* win_ = nullptr;
     SDL_Renderer* ren_ = nullptr;
@@ -88,6 +90,11 @@ private:
 
     Mode mode_ = Mode::Camera;
     bool running_ = true;
+
+    // Live facial-expression filter (cycled by the smiley button).
+    Filter filter_ = Filter::None;
+    double filterPhase_ = 0.0;      // free-running counter for tear animation
+    Uint32 filterLabelUntil_ = 0;   // show the filter name briefly after a change
 
     cv::Mat lastFrame_;        // most recent live frame (source for photos)
     cv::Mat galleryMat_;       // decoded image/thumbnail currently shown
