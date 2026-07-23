@@ -550,8 +550,20 @@ void App::dispatch(Action a) {
 
 void App::capturePhoto() {
     if (lastFrame_.empty()) return;
+    // Guard against the output dir having gone missing since startup (e.g. an
+    // unmounted SD/USB path) so the write below can actually land.
+    ensureDir(cfg_.outputDir);
     std::string path = timestampName("IMG", ".jpg");
-    cv::imwrite(path, lastFrame_);
+    bool ok = false;
+    try {
+        ok = cv::imwrite(path, lastFrame_);
+    } catch (const cv::Exception& e) {
+        std::cerr << "imwrite threw for " << path << ": " << e.what() << "\n";
+    }
+    if (!ok) {
+        std::cerr << "failed to save " << path << "\n";
+        return;
+    }
     std::cout << "saved " << path << "\n";
     flashStart_ = SDL_GetTicks(); // shutter flash animation
     refreshThumbnail();           // update the gallery-button preview
@@ -563,6 +575,7 @@ void App::toggleRecording() {
         std::cout << "recording stopped\n";
         refreshThumbnail();
     } else if (!lastFrame_.empty()) {
+        ensureDir(cfg_.outputDir); // same guard as photos: writer needs the dir
         std::string path = timestampName("VID", ".mp4");
         cv::Size sz(lastFrame_.cols, lastFrame_.rows);
         if (recorder_.start(path, sz, cam_->fps(), cfg_.audio))

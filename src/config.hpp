@@ -31,4 +31,8 @@ bool parseArgs(int argc, char** argv, Config& out, int* exitCode);
 // Default capture directory: $HOME/Pictures/open-lego-camera (created if needed).
 std::string defaultOutputDir();
 
+// Create `path` and every missing parent (like `mkdir -p`). Returns true when
+// the directory exists afterwards.
+bool ensureDir(const std::string& path);
+
 } // namespace olc
