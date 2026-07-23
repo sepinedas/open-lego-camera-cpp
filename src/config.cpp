@@ -25,7 +25,10 @@ static void printUsage(const char* prog) {
         "  --picam-name NAME            libcamera camera id to select (see\n"
         "                               `rpicam-hello --list-cameras`)\n"
         "  --size WxH                   requested preview size (default: 1280x720)\n"
-        "  --touch-rotate 0|90|180|270  rotate touch to match a rotated panel\n"
+        "  --rotate 0|90|180|270        rotate the whole UI (preview + buttons)\n"
+        "                               to match a rotated panel\n"
+        "  --touch-rotate 0|90|180|270  extra touch rotation if the touch panel\n"
+        "                               is misaligned from the display\n"
         "                               (e.g. Pimoroni HyperPixel)\n"
         "  --touch-flip-x               mirror touch horizontally\n"
         "  --touch-flip-y               mirror touch vertically\n"
@@ -81,6 +84,14 @@ bool parseArgs(int argc, char** argv, Config& out, int* exitCode) {
         } else if (a == "--picam-name") {
             const char* v = need(i); if (!v) return false;
             out.picamName = v;
+        } else if (a == "--rotate") {
+            const char* v = need(i); if (!v) return false;
+            out.rotate = std::atoi(v);
+            if (out.rotate != 0 && out.rotate != 90 &&
+                out.rotate != 180 && out.rotate != 270) {
+                std::cerr << "bad --rotate (0|90|180|270): " << v << "\n";
+                *exitCode = 2; return false;
+            }
         } else if (a == "--touch-rotate") {
             const char* v = need(i); if (!v) return false;
             out.touchRotate = std::atoi(v);

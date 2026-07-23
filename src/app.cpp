@@ -16,6 +16,7 @@ namespace olc {
 App::~App() {
     if (recorder_.recording()) recorder_.stop();
     if (tex_) SDL_DestroyTexture(tex_);
+    if (canvas_) SDL_DestroyTexture(canvas_);
     if (ren_) SDL_DestroyRenderer(ren_);
     if (win_) SDL_DestroyWindow(win_);
     SDL_Quit();
@@ -91,9 +92,38 @@ bool App::initDisplay() {
         SDL_GetRendererOutputSize(ren_, &screenW_, &screenH_);
         SDL_ShowCursor(SDL_DISABLE);
         SDL_SetRenderDrawBlendMode(ren_, SDL_BLENDMODE_BLEND);
+
+        // Set up UI rotation. For 90/270 the logical canvas is the panel with
+        // width/height swapped; everything is drawn there and blitted rotated.
+        rotate_ = cfg_.rotate;
+        if (rotate_ != 0 && !SDL_RenderTargetSupported(ren_)) {
+            std::cerr << "display: renderer can't rotate (no target textures); "
+                         "drawing unrotated\n";
+            rotate_ = 0;
+        }
+        bool swap = (rotate_ == 90 || rotate_ == 270);
+        viewW_ = swap ? screenH_ : screenW_;
+        viewH_ = swap ? screenW_ : screenH_;
+        if (rotate_ != 0) {
+            canvas_ = SDL_CreateTexture(ren_, SDL_PIXELFORMAT_ARGB8888,
+                                        SDL_TEXTUREACCESS_TARGET, viewW_, viewH_);
+            if (!canvas_) {
+                std::cerr << "display: canvas alloc failed (" << SDL_GetError()
+                          << "); drawing unrotated\n";
+                rotate_ = 0;
+                viewW_ = screenW_;
+                viewH_ = screenH_;
+            } else {
+                SDL_SetTextureBlendMode(canvas_, SDL_BLENDMODE_NONE);
+            }
+        }
+
         const char* used = SDL_GetCurrentVideoDriver();
         std::cout << "display: " << (used ? used : "?") << " " << screenW_
-                  << "x" << screenH_ << "\n";
+                  << "x" << screenH_;
+        if (rotate_) std::cout << " (UI rotated " << rotate_ << ", logical "
+                               << viewW_ << "x" << viewH_ << ")";
+        std::cout << "\n";
         return true;
     }
 
@@ -106,6 +136,39 @@ bool App::initDisplay() {
 void App::clear() {
     SDL_SetRenderDrawColor(ren_, 0, 0, 0, 255);
     SDL_RenderClear(ren_);
+}
+
+// Point every subsequent draw call at the logical canvas (when rotating).
+void App::beginFrame() {
+    if (canvas_) SDL_SetRenderTarget(ren_, canvas_);
+}
+
+// Finish the frame: blit the logical canvas onto the panel, rotated, and flip.
+void App::present() {
+    if (canvas_) {
+        SDL_SetRenderTarget(ren_, nullptr);
+        SDL_SetRenderDrawColor(ren_, 0, 0, 0, 255);
+        SDL_RenderClear(ren_);
+        // A dst rect the size of the logical canvas, centred on the panel, then
+        // rotated: for 90/270 its bounding box becomes the full panel.
+        SDL_Rect dst{(screenW_ - viewW_) / 2, (screenH_ - viewH_) / 2,
+                     viewW_, viewH_};
+        SDL_RenderCopyEx(ren_, canvas_, nullptr, &dst, (double)rotate_, nullptr,
+                         SDL_FLIP_NONE);
+    }
+    SDL_RenderPresent(ren_);
+}
+
+// Undo the display rotation so a panel tap lands on the right UI element.
+void App::physicalToView(int px, int py, int& vx, int& vy) const {
+    switch (rotate_) {
+        case 90:  vx = py;             vy = screenW_ - px; break;
+        case 180: vx = screenW_ - px;  vy = screenH_ - py; break;
+        case 270: vx = screenH_ - py;  vy = px;            break;
+        default:  vx = px;             vy = py;            break;
+    }
+    vx = std::min(viewW_ - 1, std::max(0, vx));
+    vy = std::min(viewH_ - 1, std::max(0, vy));
 }
 
 // Blit a BGR cv::Mat to the screen, preserving aspect ratio (letterboxed).
@@ -128,12 +191,12 @@ void App::renderMat(const cv::Mat& src) {
     }
     SDL_UpdateTexture(tex_, nullptr, bgr.data, static_cast<int>(bgr.step));
 
-    // Letterbox into the screen.
-    double sx = (double)screenW_ / bgr.cols;
-    double sy = (double)screenH_ / bgr.rows;
+    // Letterbox into the logical view (which the canvas then rotates).
+    double sx = (double)viewW_ / bgr.cols;
+    double sy = (double)viewH_ / bgr.rows;
     double s = std::min(sx, sy);
     int dw = (int)(bgr.cols * s), dh = (int)(bgr.rows * s);
-    SDL_Rect dst{(screenW_ - dw) / 2, (screenH_ - dh) / 2, dw, dh};
+    SDL_Rect dst{(viewW_ - dw) / 2, (viewH_ - dh) / 2, dw, dh};
     SDL_RenderCopy(ren_, tex_, nullptr, &dst);
 }
 
@@ -186,18 +249,24 @@ void App::pumpEvents() {
                     menu_.wake();
                 }
                 break;
-            case SDL_MOUSEBUTTONDOWN:
+            case SDL_MOUSEBUTTONDOWN: {
                 // Ignore mouse events SDL synthesises from touch (which ==
                 // SDL_TOUCH_MOUSEID); the SDL_FINGERDOWN below handles those,
                 // otherwise every tap would fire twice.
-                if (e.button.which != SDL_TOUCH_MOUSEID)
-                    onTap(e.button.x, e.button.y);
+                if (e.button.which != SDL_TOUCH_MOUSEID) {
+                    int vx, vy;
+                    physicalToView(e.button.x, e.button.y, vx, vy);
+                    onTap(vx, vy);
+                }
                 break;
+            }
             case SDL_FINGERDOWN: {
-                // Touch coords are normalised 0..1 on KMSDRM.
-                int px, py;
+                // Touch coords are normalised 0..1 on KMSDRM: correct for any
+                // touch-panel misalignment, then undo the display rotation.
+                int px, py, vx, vy;
                 mapTouch(e.tfinger.x, e.tfinger.y, px, py);
-                onTap(px, py);
+                physicalToView(px, py, vx, vy);
+                onTap(vx, vy);
                 break;
             }
             default:
@@ -222,7 +291,7 @@ void App::mapTouch(float nx, float ny, int& px, int& py) const {
 
 void App::onTap(int x, int y) {
     if (mode_ == Mode::ConfirmDelete) {
-        auto btns = menu_.layout(mode_, screenW_, screenH_, false);
+        auto btns = menu_.layout(mode_, viewW_, viewH_, false);
         Action a = Menu::hitTest(btns, x, y);
         dispatch(a == Action::ConfirmYes ? Action::ConfirmYes : Action::ConfirmNo);
         return;
@@ -234,7 +303,7 @@ void App::onTap(int x, int y) {
     if (!wasAwake) return;
 
     bool hasVideo = gallery_ && !gallery_->empty() && gallery_->currentIsVideo();
-    auto btns = menu_.layout(mode_, screenW_, screenH_, hasVideo);
+    auto btns = menu_.layout(mode_, viewW_, viewH_, hasVideo);
     dispatch(Menu::hitTest(btns, x, y));
 }
 
@@ -305,6 +374,7 @@ void App::playCurrentVideo() {
     bool stop = false;
     while (running_ && !stop && vc.read(frame) && !frame.empty()) {
         Uint32 t0 = SDL_GetTicks();
+        beginFrame();
         renderMat(frame);
         present();
 
@@ -331,17 +401,18 @@ void App::renderCamera() {
 
     if (recorder_.recording()) recorder_.writeFrame(lastFrame_);
 
+    beginFrame();
     renderMat(lastFrame_);
 
     // Persistent recording indicator (independent of the menu fade).
     if (recorder_.recording()) {
-        int r = std::max(8, screenH_ / 60);
+        int r = std::max(8, viewH_ / 60);
         filledCircleRGBA(ren_, 24 + r, 24 + r, r, 235, 60, 60, 235);
     }
 
     if (menu_.awake()) {
         Uint8 a = menu_.alpha();
-        auto btns = menu_.layout(Mode::Camera, screenW_, screenH_, false);
+        auto btns = menu_.layout(Mode::Camera, viewW_, viewH_, false);
         for (const auto& b : btns)
             Menu::drawButton(ren_, b, a, recorder_.recording());
     }
@@ -367,15 +438,16 @@ void App::ensureGalleryImage() {
 void App::renderGallery() {
     ensureGalleryImage();
 
+    beginFrame();
     if (galleryMat_.empty()) {
         clear(); // nothing captured yet: black with just the Back control
     } else {
         renderMat(galleryMat_);
         // A centred play glyph hints that the current item is a video.
         if (gallery_->currentIsVideo()) {
-            int r = std::max(30, screenH_ / 10);
-            filledCircleRGBA(ren_, screenW_ / 2, screenH_ / 2, r, 0, 0, 0, 90);
-            drawIcon(ren_, Action::Play, screenW_ / 2, screenH_ / 2,
+            int r = std::max(30, viewH_ / 10);
+            filledCircleRGBA(ren_, viewW_ / 2, viewH_ / 2, r, 0, 0, 0, 90);
+            drawIcon(ren_, Action::Play, viewW_ / 2, viewH_ / 2,
                      (int)(r * 0.62), 220, false);
         }
     }
@@ -383,7 +455,7 @@ void App::renderGallery() {
     Uint8 a = menu_.awake() ? menu_.alpha() : (Uint8)0;
     if (a > 0) {
         bool hasVideo = gallery_->currentIsVideo();
-        auto btns = menu_.layout(Mode::Gallery, screenW_, screenH_, hasVideo);
+        auto btns = menu_.layout(Mode::Gallery, viewW_, viewH_, hasVideo);
         for (const auto& b : btns) Menu::drawButton(ren_, b, a, false);
     }
     present();
@@ -408,10 +480,11 @@ int App::run() {
             case Mode::ConfirmDelete: {
                 // Dim the shown item, then two always-on confirm buttons.
                 ensureGalleryImage();
+                beginFrame();
                 if (!galleryMat_.empty()) renderMat(galleryMat_);
                 else clear();
-                boxRGBA(ren_, 0, 0, screenW_, screenH_, 0, 0, 0, 120);
-                auto btns = menu_.layout(Mode::ConfirmDelete, screenW_, screenH_, false);
+                boxRGBA(ren_, 0, 0, viewW_, viewH_, 0, 0, 0, 120);
+                auto btns = menu_.layout(Mode::ConfirmDelete, viewW_, viewH_, false);
                 for (const auto& b : btns) Menu::drawButton(ren_, b, 255, false);
                 present();
                 break;

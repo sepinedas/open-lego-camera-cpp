@@ -18,14 +18,23 @@ constexpr Uint32 kFadeMs = 500;     // then fades out over this long
 std::vector<Button> row(const std::vector<Action>& actions, int sw, int sh) {
     std::vector<Button> out;
     if (actions.empty()) return out;
-    int r = std::max(28, sh / 16);
-    int gap = r; // space between disc edges
+    int n = (int)actions.size();
+
+    // Size the discs off the smaller screen dimension, then shrink so the whole
+    // row (pitch = 2r + gap, gap = r  ->  total width = r*(3n-1)) fits across the
+    // width with a small margin. This keeps all buttons on-screen in both
+    // landscape and rotated (portrait) layouts.
+    int r = std::max(24, std::min(sw, sh) / 14);
+    int rFit = (int)(0.96 * sw / (3 * n - 1));
+    r = std::max(16, std::min(r, rFit));
+
+    int gap = r;
     int pitch = 2 * r + gap;
-    int total = pitch * (int)actions.size() - gap;
+    int total = pitch * n - gap;
     int x0 = sw / 2 - total / 2 + r;
     int y = sh - r - std::max(20, sh / 24);
-    for (size_t i = 0; i < actions.size(); ++i)
-        out.push_back({actions[i], x0 + (int)i * pitch, y, r});
+    for (int i = 0; i < n; ++i)
+        out.push_back({actions[i], x0 + i * pitch, y, r});
     return out;
 }
 } // namespace
@@ -53,8 +62,9 @@ std::vector<Button> Menu::layout(Mode mode, int sw, int sh, bool hasVideo) const
             return row(a, sw, sh);
         }
         case Mode::ConfirmDelete: {
-            // Two large, always-visible buttons centred on screen.
-            int r = std::max(46, sh / 9);
+            // Two large, always-visible buttons centred on screen; size off the
+            // smaller dimension so both fit side by side in portrait too.
+            int r = std::max(46, std::min(sw, sh) / 6);
             int y = sh / 2;
             int dx = r + r / 2 + 20;
             return {{Action::ConfirmNo, sw / 2 - dx, y, r},

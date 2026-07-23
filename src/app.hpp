@@ -33,8 +33,11 @@ private:
     // --- display helpers ---
     bool initDisplay();
     void renderMat(const cv::Mat& mat); // letterboxed blit of a BGR frame
-    void present() { SDL_RenderPresent(ren_); }
+    void beginFrame();                  // target the offscreen (logical) canvas
+    void present();                     // blit the canvas to the panel, rotated
     void clear();
+    // Map a panel-space pixel to logical (pre-rotation) UI coords.
+    void physicalToView(int px, int py, int& vx, int& vy) const;
 
     // --- input ---
     void pumpEvents();
@@ -63,9 +66,12 @@ private:
 
     SDL_Window* win_ = nullptr;
     SDL_Renderer* ren_ = nullptr;
-    SDL_Texture* tex_ = nullptr;
+    SDL_Texture* tex_ = nullptr;        // streaming texture for the camera frame
+    SDL_Texture* canvas_ = nullptr;     // offscreen UI target, blitted rotated
     int texW_ = 0, texH_ = 0;
-    int screenW_ = 0, screenH_ = 0;
+    int screenW_ = 0, screenH_ = 0;     // physical panel size
+    int viewW_ = 0, viewH_ = 0;         // logical UI size (swapped for 90/270)
+    int rotate_ = 0;                    // UI rotation in degrees clockwise
 
     Mode mode_ = Mode::Camera;
     bool running_ = true;

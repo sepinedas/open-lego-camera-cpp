@@ -109,11 +109,31 @@ build/open-lego-camera [options]
                                (default: ~/Pictures/open-lego-camera)
   --webcam-index N             force /dev/videoN for a USB webcam
   --size WxH                   requested preview size (default: 1280x720)
+  --rotate 0|90|180|270        rotate the whole UI to match a rotated panel
+  --touch-rotate 0|90|180|270  extra touch rotation if touch is misaligned
+  --touch-flip-x / --touch-flip-y   mirror touch on an axis
   --driver NAME                force SDL video driver (kmsdrm, fbcon, x11)
   --windowed                   run in a window instead of fullscreen
   --no-audio                   record video without sound
   --help                       show this help
 ```
+
+### Rotating the display
+
+`--rotate 90|180|270` rotates the **entire UI** — the camera preview *and* the
+icon buttons — clockwise to match a panel mounted in a different orientation
+(the UI is drawn to an offscreen canvas and blitted rotated, and taps are
+un-rotated to match). Use this when the picture and buttons appear sideways:
+
+```sh
+build/open-lego-camera --rotate 90
+```
+
+`--rotate` also rotates touch input to match, so if the touch panel is aligned
+with the display you usually need nothing else. `--touch-rotate` /
+`--touch-flip-x` / `--touch-flip-y` are a *separate* correction for when the
+touch controller is mounted rotated/mirrored **relative to the panel** (common
+on the HyperPixel) — reach for them only if taps are still off after `--rotate`.
 
 - Captures are saved as `IMG_YYYYMMDD_HHMMSS.jpg` and
   `VID_YYYYMMDD_HHMMSS.mp4`.
@@ -297,7 +317,13 @@ It's a KMS output, so nothing special is needed — the driver auto-selects
 build/open-lego-camera            # add --driver kmsdrm to force it
 ```
 
-The UI is fullscreen and adapts to the panel's 800×480 automatically.
+The UI is fullscreen and adapts to the panel's 800×480 automatically. If the
+preview and buttons come up **sideways** for how the panel is mounted, rotate
+the whole UI with `--rotate` (see [Rotating the display](#rotating-the-display)):
+
+```sh
+build/open-lego-camera --rotate 90    # try 90/180/270
+```
 
 ### 3. Align the touch
 
