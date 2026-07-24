@@ -93,6 +93,34 @@ libcamerasrc negotiates the sensor's native Bayer stream
 (`2028x1520-SRGGB16/RAW`), which the pipeline can't convert, and it fails to
 start. Pinning a processed format avoids that.
 
+#### Preview performance (NV12 → GPU)
+
+The ISP inside the Pi camera already outputs **NV12** (a YUV format), so the
+live preview keeps frames in NV12 all the way to the screen and lets the Pi's
+**GPU** do the YUV→RGB conversion while it draws — via an `SDL_PIXELFORMAT_NV12`
+texture — instead of spending a CPU core on a per-frame `videoconvert`. Pinch
+**zoom** is likewise a GPU crop-and-scale (a texture source rect), not a CPU
+`resize`. The result is a noticeably smoother, lower-latency preview on the Pi
+Zero 2 W, where the CPU colour-convert was the frame-rate bottleneck.
+
+A frame is only converted to BGR on the CPU when something actually needs the
+pixels — taking a photo or recording — so the common "just previewing" case
+does no colour conversion or resize on the CPU at all.
+
+The **facial filters** stay on that fast path too. Face detection runs directly
+on the NV12 **Y (luma) plane** — which _is_ a grayscale image — so it needs no
+conversion, and only the **face region** is converted to BGR, reshaped, and
+re-encoded back into the NV12 frame. The GPU still converts and zooms the whole
+frame, so filtering costs work proportional to the face's size on screen rather
+than a full-frame convert every frame. (A USB webcam, which delivers BGR, still
+converts the whole frame for filters.)
+
+If the renderer can't sample NV12 textures, or raw NV12 capture won't start, the
+app transparently falls back to converting to BGR with libcamera's
+`videoconvert` — now spread across **all CPU cores** (`n-threads`) with a
+decoupling `queue`, so even the fallback is faster than a single-threaded
+convert.
+
 If you have **more than one camera** (e.g. the IMX500 *and* a USB webcam),
 `--camera auto` tries the first libcamera camera before falling back to a
 webcam. Force a source explicitly with `--camera picam` / `--camera webcam`,

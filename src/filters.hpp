@@ -37,8 +37,26 @@ public:
     // when the filter is None, no cascade loaded, or no face is found.
     void apply(cv::Mat& frame, Filter filter, double phase);
 
+    // --- region-limited API (keeps the NV12 preview off the CPU convert) ---
+    //
+    // Refresh the detected faces from a luma/grayscale image (the NV12 Y plane
+    // is exactly that, so no colour conversion is needed). Honours the
+    // detect-every-N-frames cadence internally; call once per frame.
+    void updateDetection(const cv::Mat& luma);
+
+    // The single frame-space rectangle covering everything `filter` will modify
+    // for the currently-detected faces (face boxes + margin for the warp and
+    // tears, clamped to WxH and made even for chroma-subsampled buffers). An
+    // empty rect means there is nothing to reshape this frame.
+    cv::Rect dirtyRegion(Filter filter, int w, int h) const;
+
+    // Apply `filter` to `roi`, a BGR sub-image whose top-left sits at `origin`
+    // in frame space. Only the parts of each face falling inside `roi` are
+    // touched, so callers can convert and re-encode just the dirty region.
+    void applyRegion(cv::Mat& roi, cv::Point origin, Filter filter, double phase);
+
 private:
-    void detect(const cv::Mat& frame);           // refresh faces_ (full-res coords)
+    void detectLuma(const cv::Mat& luma);        // refresh faces_ (full-res coords)
     void applySmile(cv::Mat& frame, const cv::Rect& face);
     void applyCry(cv::Mat& frame, const cv::Rect& face, double phase);
 

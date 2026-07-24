@@ -309,6 +309,8 @@ static std::string captureTime(const std::string& path) {
 }
 
 // Blit a BGR cv::Mat to the screen, preserving aspect ratio (letterboxed).
+// Used for decoded gallery/playback frames; the live preview goes through
+// blitCamera so it can keep NV12 and zoom on the GPU.
 void App::renderMat(const cv::Mat& src) {
     clear();
     if (src.empty()) return;
@@ -319,22 +321,57 @@ void App::renderMat(const cv::Mat& src) {
     else if (src.channels() == 1) cv::cvtColor(src, bgr, cv::COLOR_GRAY2BGR);
     else bgr = src;
 
-    if (!tex_ || texW_ != bgr.cols || texH_ != bgr.rows) {
-        if (tex_) SDL_DestroyTexture(tex_);
-        tex_ = SDL_CreateTexture(ren_, SDL_PIXELFORMAT_BGR24,
-                                 SDL_TEXTUREACCESS_STREAMING, bgr.cols, bgr.rows);
-        texW_ = bgr.cols;
-        texH_ = bgr.rows;
-    }
-    SDL_UpdateTexture(tex_, nullptr, bgr.data, static_cast<int>(bgr.step));
+    blitCamera(bgr, PixelFormat::BGR, bgr.cols, bgr.rows, nullptr);
+}
 
-    // Letterbox into the logical view (which the canvas then rotates).
-    double sx = (double)viewW_ / bgr.cols;
-    double sy = (double)viewH_ / bgr.rows;
-    double s = std::min(sx, sy);
-    int dw = (int)(bgr.cols * s), dh = (int)(bgr.rows * s);
+// Upload a camera frame and blit it letterboxed. For NV12 we hand SDL the raw
+// planar buffer and create an NV12 texture, so the GPU (not a CPU core) does
+// the YUV->RGB conversion. `src`, when given, is the region to display -- the
+// GPU scales it to fill, which is how pinch-zoom stays free of a CPU resize.
+void App::blitCamera(const cv::Mat& frame, PixelFormat fmt, int imgW, int imgH,
+                     const SDL_Rect* src) {
+    if (frame.empty() || imgW <= 0 || imgH <= 0) return;
+
+    // Fall back to a CPU convert if the renderer can't sample NV12 textures.
+    cv::Mat upload = frame;
+    Uint32 sdlFmt = (fmt == PixelFormat::NV12) ? SDL_PIXELFORMAT_NV12
+                                               : SDL_PIXELFORMAT_BGR24;
+    if (fmt == PixelFormat::NV12 && nv12Unsupported_) {
+        cv::cvtColor(frame, bgrScratch_, cv::COLOR_YUV2BGR_NV12);
+        upload = bgrScratch_;
+        sdlFmt = SDL_PIXELFORMAT_BGR24;
+    }
+
+    if (!tex_ || texW_ != imgW || texH_ != imgH || texFmt_ != sdlFmt) {
+        if (tex_) SDL_DestroyTexture(tex_);
+        tex_ = SDL_CreateTexture(ren_, sdlFmt, SDL_TEXTUREACCESS_STREAMING,
+                                 imgW, imgH);
+        // First-time NV12 texture rejection: remember it and convert on CPU.
+        if (!tex_ && sdlFmt == SDL_PIXELFORMAT_NV12) {
+            std::cerr << "display: renderer rejects NV12 textures; converting on "
+                         "CPU instead\n";
+            nv12Unsupported_ = true;
+            cv::cvtColor(frame, bgrScratch_, cv::COLOR_YUV2BGR_NV12);
+            upload = bgrScratch_;
+            sdlFmt = SDL_PIXELFORMAT_BGR24;
+            tex_ = SDL_CreateTexture(ren_, sdlFmt, SDL_TEXTUREACCESS_STREAMING,
+                                     imgW, imgH);
+        }
+        if (!tex_) return;
+        SDL_SetTextureBlendMode(tex_, SDL_BLENDMODE_NONE);
+        texW_ = imgW;
+        texH_ = imgH;
+        texFmt_ = sdlFmt;
+    }
+    SDL_UpdateTexture(tex_, nullptr, upload.data, static_cast<int>(upload.step));
+
+    // Letterbox the (full) image into the logical view, then let the GPU crop
+    // to `src` when zooming -- the destination stays put so the framing is
+    // stable as you zoom.
+    double s = std::min((double)viewW_ / imgW, (double)viewH_ / imgH);
+    int dw = (int)(imgW * s), dh = (int)(imgH * s);
     SDL_Rect dst{(viewW_ - dw) / 2, (viewH_ - dh) / 2, dw, dh};
-    SDL_RenderCopy(ren_, tex_, nullptr, &dst);
+    SDL_RenderCopy(ren_, tex_, src, &dst);
 }
 
 // ---------------------------------------------------------------------------
@@ -549,14 +586,21 @@ void App::dispatch(Action a) {
 // ---------------------------------------------------------------------------
 
 void App::capturePhoto() {
-    if (lastFrame_.empty()) return;
+    if (lastNative_.empty()) return;
     // Guard against the output dir having gone missing since startup (e.g. an
     // unmounted SD/USB path) so the write below can actually land.
     ensureDir(cfg_.outputDir);
+    // Materialise a BGR frame on demand (the preview kept it in the camera's
+    // native format). Reshape at full resolution, then zoom -- the same order as
+    // the preview -- so the saved photo matches what's on screen.
+    cv::Mat shot = cam_->nativeToBGR(lastNative_);
+    if (shot.empty()) return;
+    faceFilter_.apply(shot, filter_, filterPhase_);
+    cam_->cropZoom(shot);
     std::string path = timestampName("IMG", ".jpg");
     bool ok = false;
     try {
-        ok = cv::imwrite(path, lastFrame_);
+        ok = cv::imwrite(path, shot);
     } catch (const cv::Exception& e) {
         std::cerr << "imwrite threw for " << path << ": " << e.what() << "\n";
     }
@@ -574,10 +618,11 @@ void App::toggleRecording() {
         recorder_.stop();
         std::cout << "recording stopped\n";
         refreshThumbnail();
-    } else if (!lastFrame_.empty()) {
+    } else if (!lastNative_.empty()) {
         ensureDir(cfg_.outputDir); // same guard as photos: writer needs the dir
         std::string path = timestampName("VID", ".mp4");
-        cv::Size sz(lastFrame_.cols, lastFrame_.rows);
+        // Recorded frames are the full-size zoomed BGR the camera hands back.
+        cv::Size sz(cam_->width(), cam_->height());
         if (recorder_.start(path, sz, cam_->fps(), cfg_.audio))
             std::cout << "recording -> " << path << "\n";
     }
@@ -621,18 +666,43 @@ void App::playCurrentVideo() {
 
 void App::renderCamera() {
     cv::Mat frame;
-    if (cam_->read(frame)) {
-        // Reshape the live face before it becomes the frame we preview, capture
-        // and record, so photos and videos carry the same expression.
-        faceFilter_.apply(frame, filter_, filterPhase_);
-        lastFrame_ = frame;
-    }
-    if (filter_ != Filter::None) filterPhase_ += 1.0;
+    if (cam_->read(frame)) lastNative_ = frame; // camera-native, no zoom applied
 
-    if (recorder_.recording()) recorder_.writeFrame(lastFrame_);
+    const bool recording = recorder_.recording();
+    const bool filtering = (filter_ != Filter::None);
+    // An NV12 frame can be filtered without a full-frame CPU convert -- only the
+    // face region is reshaped and re-encoded, the GPU converts and zooms the
+    // rest (see renderFilteredNV12). A BGR webcam, a renderer without NV12
+    // textures, or recording (which needs the whole frame as BGR to write) all
+    // fall back to converting the full frame.
+    const bool nv12FilterPath = filtering && !recording &&
+                                cam_->format() == PixelFormat::NV12 &&
+                                !nv12Unsupported_ && !lastNative_.empty();
 
     beginFrame();
-    renderMat(lastFrame_);
+    if (recording || (filtering && !nv12FilterPath)) {
+        // Full-resolution BGR: convert, reshape the face, then zoom. The filter
+        // runs before the zoom crop, matching the NV12 preview path so a photo
+        // or recording carries exactly the expression shown on screen.
+        cv::Mat bgr = cam_->nativeToBGR(lastNative_);
+        faceFilter_.apply(bgr, filter_, filterPhase_);
+        cam_->cropZoom(bgr);
+        if (recording) recorder_.writeFrame(bgr);
+        renderMat(bgr);
+    } else if (nv12FilterPath) {
+        renderFilteredNV12();
+    } else if (!lastNative_.empty()) {
+        // Pure preview: no CPU colour-convert or resize at all.
+        clear();
+        cv::Rect zr = cam_->zoomSrcRect(cam_->width(), cam_->height());
+        SDL_Rect z{zr.x, zr.y, zr.width, zr.height};
+        blitCamera(lastNative_, cam_->format(), cam_->width(), cam_->height(),
+                   cam_->zoomed() ? &z : nullptr);
+    } else {
+        clear();
+    }
+
+    if (filter_ != Filter::None) filterPhase_ += 1.0;
 
     // Persistent recording indicator (independent of the menu fade).
     if (recorder_.recording()) {
@@ -691,6 +761,37 @@ void App::renderCamera() {
         }
     }
     present();
+}
+
+// Filtered preview that keeps the frame in NV12. Detection runs on the Y plane
+// (already a luma image, so no colour convert), and only the face region is
+// converted to BGR, reshaped, and re-encoded back into a private NV12 copy. The
+// GPU then does the YUV->RGB conversion and the zoom crop for the whole frame,
+// exactly as on the unfiltered fast path -- so turning a filter on no longer
+// forces a full-frame CPU convert every frame.
+void App::renderFilteredNV12() {
+    const int W = cam_->width(), H = cam_->height();
+    faceFilter_.updateDetection(lastNative_.rowRange(0, H)); // Y plane == luma
+    cv::Rect region = faceFilter_.dirtyRegion(filter_, W, H);
+
+    clear();
+    cv::Rect zr = cam_->zoomSrcRect(W, H);
+    SDL_Rect z{zr.x, zr.y, zr.width, zr.height};
+    const SDL_Rect* zp = cam_->zoomed() ? &z : nullptr;
+
+    if (region.area() == 0) {
+        // No face in view: nothing to reshape, so stay on the pure fast path.
+        blitCamera(lastNative_, PixelFormat::NV12, W, H, zp);
+        return;
+    }
+
+    // Reshape the region on a private copy so the shared capture buffer (used by
+    // stills) is never mutated, then upload the whole NV12 once.
+    lastNative_.copyTo(filteredNative_);
+    cv::Mat roi = Camera::nv12CropToBGR(filteredNative_, region);
+    faceFilter_.applyRegion(roi, region.tl(), filter_, filterPhase_);
+    Camera::bgrIntoNV12(roi, filteredNative_, region.tl());
+    blitCamera(filteredNative_, PixelFormat::NV12, W, H, zp);
 }
 
 void App::ensureGalleryImage() {

@@ -35,6 +35,12 @@ private:
     // --- display helpers ---
     bool initDisplay();
     void renderMat(const cv::Mat& mat); // letterboxed blit of a BGR frame
+    // Upload a camera frame (native NV12 or BGR) and blit it letterboxed into
+    // the view. `src` (in image pixels) selects the region to show, so digital
+    // zoom is a GPU crop-and-scale; null shows the whole image. For NV12 the
+    // GPU performs the YUV->RGB conversion.
+    void blitCamera(const cv::Mat& frame, PixelFormat fmt, int imgW, int imgH,
+                    const SDL_Rect* src);
     void beginFrame();                  // target the offscreen (logical) canvas
     void present();                     // blit the canvas to the panel, rotated
     void clear();
@@ -68,6 +74,9 @@ private:
 
     // --- per-mode rendering ---
     void renderCamera();
+    // Preview with a facial filter while keeping the frame in NV12: reshape only
+    // the face region(s) on the CPU and let the GPU convert and zoom the rest.
+    void renderFilteredNV12();
     void renderGallery();
     void ensureGalleryImage();
     std::string timestampName(const char* prefix, const char* ext) const;
@@ -84,6 +93,9 @@ private:
     SDL_Texture* tex_ = nullptr;        // streaming texture for the camera frame
     SDL_Texture* canvas_ = nullptr;     // offscreen UI target, blitted rotated
     int texW_ = 0, texH_ = 0;
+    Uint32 texFmt_ = 0;                 // SDL pixel format tex_ was created with
+    bool nv12Unsupported_ = false;      // renderer can't take NV12 -> CPU convert
+    cv::Mat bgrScratch_;               // NV12->BGR fallback buffer for blitCamera
     int screenW_ = 0, screenH_ = 0;     // physical panel size
     int viewW_ = 0, viewH_ = 0;         // logical UI size (swapped for 90/270)
     int rotate_ = 0;                    // UI rotation in degrees clockwise
@@ -96,7 +108,8 @@ private:
     double filterPhase_ = 0.0;      // free-running counter for tear animation
     Uint32 filterLabelUntil_ = 0;   // show the filter name briefly after a change
 
-    cv::Mat lastFrame_;        // most recent live frame (source for photos)
+    cv::Mat lastNative_;       // most recent live frame, camera-native format
+    cv::Mat filteredNative_;   // NV12 copy with the face region reshaped in place
     cv::Mat galleryMat_;       // decoded image/thumbnail currently shown
     std::string galleryShown_; // path backing galleryMat_
 

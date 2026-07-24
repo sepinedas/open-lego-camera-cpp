@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <iostream>
+#include <thread>
+#include <vector>
 
 #include <opencv2/imgproc.hpp>
 
@@ -11,21 +13,47 @@ namespace {
 constexpr double kMaxZoom = 4.0;
 constexpr double kZoomStep = 1.25; // multiplicative per tap
 
-// GStreamer pipeline that pulls frames from a Pi camera through libcamera and
-// hands OpenCV plain BGR.
+// Number of CPU threads to hand the software colour converter in the fallback
+// pipeline. The Pi Zero 2 W is quad-core, so a single-threaded videoconvert
+// leaves three cores idle while it becomes the frame-rate bottleneck.
+int convertThreads() {
+    unsigned n = std::thread::hardware_concurrency();
+    return static_cast<int>(n == 0 ? 1 : n);
+}
+
+// Fast path: pull NV12 straight from the ISP with *no* colour conversion in the
+// pipeline. Combined with CAP_PROP_CONVERT_RGB=0 this hands OpenCV the raw
+// planar buffer, which the display then uploads to an NV12 texture so the GPU
+// does the YUV->RGB conversion. A short leaky queue decouples capture from the
+// consumer and always keeps the freshest frame.
+std::string picamPipelineNV12(int w, int h, const std::string& name) {
+    std::string src = "libcamerasrc";
+    if (!name.empty()) src += " camera-name=\"" + name + "\"";
+    return src + " ! video/x-raw,format=NV12" +
+           ",width=" + std::to_string(w) + ",height=" + std::to_string(h) +
+           " ! queue leaky=downstream max-size-buffers=2"
+           " ! appsink drop=true max-buffers=2";
+}
+
+// Fallback: ISP-processed format -> BGR via the software converter. Used only
+// when the GPU can't take NV12 textures or NV12 capture won't start. The
+// converter is spread across all cores (n-threads) and a leaky queue lets
+// capture and conversion run on separate threads instead of in lock-step.
 //
 // The source caps MUST pin a *processed* pixel format (NV12/YUV420/RGBx). If
 // they don't, libcamerasrc may negotiate the sensor's native Bayer stream
 // (e.g. the IMX500's 2028x1520-SRGGB16/RAW), which videoconvert can't consume,
 // and the pipeline fails to start. `format` forces the ISP-processed output.
 // `name` optionally selects one camera by its libcamera id when several exist.
-std::string picamPipeline(const std::string& format, int w, int h,
-                          const std::string& name) {
+std::string picamPipelineBGR(const std::string& format, int w, int h,
+                             const std::string& name) {
     std::string src = "libcamerasrc";
     if (!name.empty()) src += " camera-name=\"" + name + "\"";
     return src + " ! video/x-raw,format=" + format +
            ",width=" + std::to_string(w) + ",height=" + std::to_string(h) +
-           " ! videoconvert ! video/x-raw,format=BGR"
+           " ! queue leaky=downstream max-size-buffers=2"
+           " ! videoconvert n-threads=" + std::to_string(convertThreads()) +
+           " ! video/x-raw,format=BGR"
            " ! appsink drop=true max-buffers=2";
 }
 
@@ -48,16 +76,42 @@ bool tryWebcam(cv::VideoCapture& cap, int index, int w, int h) {
 std::unique_ptr<Camera> Camera::open(const Config& cfg) {
     std::unique_ptr<Camera> cam(new Camera());
 
-    auto openPi = [&]() -> bool {
+    // Preferred Pi path: raw NV12 delivered to OpenCV untouched, so the GPU can
+    // convert it at display time. Ask OpenCV not to auto-convert to BGR; a
+    // successful raw grab comes back as a single-channel planar buffer
+    // (height*3/2 rows). If the backend ignores that and still hands us BGR
+    // (3 channels), NV12 capture isn't available -- fall through to the BGR
+    // pipeline below.
+    auto openPiNV12 = [&]() -> bool {
+        std::string pipe = picamPipelineNV12(cfg.width, cfg.height, cfg.picamName);
+        if (!cam->cap_.open(pipe, cv::CAP_GSTREAMER)) return false;
+        cam->cap_.set(cv::CAP_PROP_CONVERT_RGB, 0);
+        cv::Mat probe;
+        if (cam->cap_.read(probe) && !probe.empty() && probe.channels() == 1 &&
+            probe.rows % 3 == 0) {
+            cam->format_ = PixelFormat::NV12;
+            cam->width_ = probe.cols;
+            cam->height_ = probe.rows * 2 / 3; // strip the interleaved UV plane
+            cam->desc_ = "Pi camera (libcamera, NV12 -> GPU convert)";
+            return true;
+        }
+        cam->cap_.release();
+        std::cerr << "picam: raw NV12 capture unavailable; using CPU convert\n";
+        return false;
+    };
+
+    auto openPiBGR = [&]() -> bool {
         // Different sensors/ISPs expose different processed formats; try the
         // common ones in turn and keep the first that actually delivers a frame.
         static const char* kFormats[] = {"NV12", "YUV420", "RGBx", "BGRx", "RGB"};
         for (const char* fmt : kFormats) {
-            std::string pipe = picamPipeline(fmt, cfg.width, cfg.height, cfg.picamName);
+            std::string pipe = picamPipelineBGR(fmt, cfg.width, cfg.height, cfg.picamName);
             if (!cam->cap_.open(pipe, cv::CAP_GSTREAMER)) continue;
             cv::Mat probe;
             if (cam->cap_.read(probe) && !probe.empty()) {
-                cam->desc_ = std::string("Pi camera (libcamera, ") + fmt + ")";
+                cam->format_ = PixelFormat::BGR;
+                cam->desc_ = std::string("Pi camera (libcamera, ") + fmt +
+                             " -> CPU convert)";
                 return true;
             }
             cam->cap_.release();
@@ -68,7 +122,10 @@ std::unique_ptr<Camera> Camera::open(const Config& cfg) {
         return false;
     };
 
+    auto openPi = [&]() -> bool { return openPiNV12() || openPiBGR(); };
+
     auto openWebcam = [&]() -> bool {
+        cam->format_ = PixelFormat::BGR;
         if (cfg.webcamIndex >= 0) {
             if (!tryWebcam(cam->cap_, cfg.webcamIndex, cfg.width, cfg.height)) return false;
             cam->desc_ = "USB webcam /dev/video" + std::to_string(cfg.webcamIndex);
@@ -94,9 +151,12 @@ std::unique_ptr<Camera> Camera::open(const Config& cfg) {
         return nullptr;
     }
 
-    // Record the actual negotiated geometry (may differ from the request).
-    cam->width_ = static_cast<int>(cam->cap_.get(cv::CAP_PROP_FRAME_WIDTH));
-    cam->height_ = static_cast<int>(cam->cap_.get(cv::CAP_PROP_FRAME_HEIGHT));
+    // For the BGR paths, record the actual negotiated geometry (the NV12 path
+    // already set width_/height_ from the raw buffer above).
+    if (cam->format_ != PixelFormat::NV12) {
+        cam->width_ = static_cast<int>(cam->cap_.get(cv::CAP_PROP_FRAME_WIDTH));
+        cam->height_ = static_cast<int>(cam->cap_.get(cv::CAP_PROP_FRAME_HEIGHT));
+    }
     double fps = cam->cap_.get(cv::CAP_PROP_FPS);
     cam->fps_ = (fps > 1.0 && fps < 121.0) ? fps : 30.0;
     if (cam->width_ <= 0 || cam->height_ <= 0) {
@@ -111,24 +171,90 @@ void Camera::zoomOut() { zoom_ = std::max(1.0, zoom_ / kZoomStep); }
 void Camera::setZoom(double z) { zoom_ = std::min(kMaxZoom, std::max(1.0, z)); }
 double Camera::maxZoom() { return kMaxZoom; }
 
-// Digital zoom: crop a centred window of size (1/zoom) and scale it back up to
-// the full frame. Uniform across both backends so behaviour is identical.
-void Camera::applyZoom(cv::Mat& frame) const {
-    if (zoom_ <= 1.001 || frame.empty()) return;
-    int cw = std::max(2, static_cast<int>(frame.cols / zoom_));
-    int ch = std::max(2, static_cast<int>(frame.rows / zoom_));
-    int x = (frame.cols - cw) / 2;
-    int y = (frame.rows - ch) / 2;
-    cv::Mat roi = frame(cv::Rect(x, y, cw, ch));
+// Centred crop for the current zoom, in display pixels. Kept even on all sides
+// so it stays valid for NV12's 2x2-subsampled chroma plane.
+cv::Rect Camera::zoomSrcRect(int w, int h) const {
+    if (zoom_ <= 1.001 || w <= 0 || h <= 0) return cv::Rect(0, 0, w, h);
+    int cw = std::max(2, static_cast<int>(w / zoom_)) & ~1;
+    int ch = std::max(2, static_cast<int>(h / zoom_)) & ~1;
+    int x = ((w - cw) / 2) & ~1;
+    int y = ((h - ch) / 2) & ~1;
+    if (x + cw > w) x = w - cw;
+    if (y + ch > h) y = h - ch;
+    return cv::Rect(x, y, cw, ch);
+}
+
+// Convert a native frame to full-size BGR, no zoom. The clone for an
+// already-BGR source hands callers their own buffer to mutate (the filters do).
+cv::Mat Camera::nativeToBGR(const cv::Mat& native) const {
+    cv::Mat bgr;
+    if (native.empty()) return bgr;
+    if (format_ == PixelFormat::NV12)
+        cv::cvtColor(native, bgr, cv::COLOR_YUV2BGR_NV12);
+    else
+        bgr = native.clone();
+    return bgr;
+}
+
+// Digital zoom on a BGR frame: crop the centred window and scale it back to the
+// full frame. Uniform across backends so a saved photo matches the preview.
+void Camera::cropZoom(cv::Mat& bgr) const {
+    if (zoom_ <= 1.001 || bgr.empty()) return;
+    cv::Rect roi = zoomSrcRect(bgr.cols, bgr.rows);
     cv::Mat zoomed;
-    cv::resize(roi, zoomed, frame.size(), 0, 0, cv::INTER_LINEAR);
-    frame = zoomed;
+    cv::resize(bgr(roi), zoomed, bgr.size(), 0, 0, cv::INTER_LINEAR);
+    bgr = zoomed;
+}
+
+cv::Mat Camera::toDisplayBGR(const cv::Mat& native) const {
+    cv::Mat bgr = nativeToBGR(native);
+    cropZoom(bgr);
+    return bgr;
+}
+
+// Assemble a contiguous NV12 sub-buffer for `r` (Y block + matching UV block),
+// then convert it to BGR. Keeps colour conversion proportional to the region
+// instead of the whole frame.
+cv::Mat Camera::nv12CropToBGR(const cv::Mat& nv12, const cv::Rect& r) {
+    const int H = nv12.rows * 2 / 3;
+    cv::Mat roi(r.height * 3 / 2, r.width, CV_8UC1);
+    // Y plane: rows [r.y, r.y+r.height).
+    nv12(cv::Rect(r.x, r.y, r.width, r.height))
+        .copyTo(roi(cv::Rect(0, 0, r.width, r.height)));
+    // Interleaved UV plane: it lives below the Y plane (starting at row H) at
+    // half the vertical resolution; the chroma for luma column x sits at byte
+    // column x, so the region's byte columns match the Y region's.
+    nv12(cv::Rect(r.x, H + r.y / 2, r.width, r.height / 2))
+        .copyTo(roi(cv::Rect(0, r.height, r.width, r.height / 2)));
+    cv::Mat bgr;
+    cv::cvtColor(roi, bgr, cv::COLOR_YUV2BGR_NV12);
+    return bgr;
+}
+
+// Inverse of nv12CropToBGR: write a filtered BGR region back into the NV12
+// buffer, re-deriving the Y plane and the 2x2-averaged UV plane.
+void Camera::bgrIntoNV12(const cv::Mat& bgr, cv::Mat& nv12, cv::Point at) {
+    if (bgr.empty() || bgr.type() != CV_8UC3) return;
+    const int H = nv12.rows * 2 / 3;
+    cv::Mat yuv;
+    cv::cvtColor(bgr, yuv, cv::COLOR_BGR2YUV); // BT.601, matching YUV2BGR_NV12
+    cv::Mat ch[3];
+    cv::split(yuv, ch);
+    // Y plane straight in.
+    ch[0].copyTo(nv12(cv::Rect(at.x, at.y, bgr.cols, bgr.rows)));
+    // U and V averaged down 2x (INTER_AREA) and interleaved into UV bytes.
+    cv::Mat u2, v2;
+    cv::resize(ch[1], u2, cv::Size(bgr.cols / 2, bgr.rows / 2), 0, 0, cv::INTER_AREA);
+    cv::resize(ch[2], v2, cv::Size(bgr.cols / 2, bgr.rows / 2), 0, 0, cv::INTER_AREA);
+    std::vector<cv::Mat> planes{u2, v2};
+    cv::Mat uv;
+    cv::merge(planes, uv);                  // CV_8UC2, UVUV interleaved
+    cv::Mat uvBytes = uv.reshape(1, u2.rows); // CV_8UC1, width == bgr.cols
+    uvBytes.copyTo(nv12(cv::Rect(at.x, H + at.y / 2, bgr.cols, bgr.rows / 2)));
 }
 
 bool Camera::read(cv::Mat& frame) {
-    if (!cap_.read(frame) || frame.empty()) return false;
-    applyZoom(frame);
-    return true;
+    return cap_.read(frame) && !frame.empty();
 }
 
 } // namespace olc
