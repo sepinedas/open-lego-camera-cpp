@@ -28,10 +28,13 @@ A touch-friendly, **icon-only** camera app for the **Raspberry Pi Zero 2 W**
   capture **date & time** is shown translucent across the top.
 - **WhatsApp-style facial filters** (smiley button): a **Big Smile** that
   stretches your mouth into a wide grin — with your teeth brightening as you
-  open it — and a **Crying** face that pulls your mouth and brows into a frown
-  and adds animated falling **tears**. The face is *reshaped in place* (its own
-  pixels warped), not covered with cartoon graphics — only the tears are drawn
-  on top. Applies live to the preview and to captured photos/videos.
+  open it — a **Crying** face that pulls your mouth and brows into a frown and
+  adds animated falling **tears**, and a **Lego Head** that drops a classic
+  yellow minifigure head — stud, dot eyes and painted smile — right over your
+  face. The expression filters *reshape your face in place* (its own pixels
+  warped) rather than pasting cartoon graphics on it; only the tears and the
+  Lego head are drawn on top. Applies live to the preview and to captured
+  photos/videos.
 
 ![Welcome screen](docs/welcome-screen.png)
 
@@ -52,7 +55,7 @@ A touch-friendly, **icon-only** camera app for the **Raspberry Pi Zero 2 W**
 | Photos, video **with audio**, zoom, gallery, delete | shutter / record / gallery icons; pinch-to-zoom; `arecord`+`ffmpeg` mux audio |
 | Icon-only buttons, no text | all icons are drawn as vector shapes (`icons.cpp`, SDL2_gfx) |
 | Headless — no X11 / window manager | SDL2 `kmsdrm`/`fbcon` renders directly to HDMI |
-| WhatsApp-style facial filters | `FaceFilter` finds the face (Haar cascade) and warps the mouth/brows with `cv::remap`; the crying filter also draws tears (`filters.cpp`) |
+| WhatsApp-style facial filters | `FaceFilter` finds the face (Haar cascade) and warps the mouth/brows with `cv::remap`; the crying filter also draws tears and the Lego-head filter paints a minifigure head over the face (`filters.cpp`) |
 
 ## Dependencies
 
@@ -182,20 +185,24 @@ build/open-lego-camera [options]
 ### Facial filters
 
 Tap the **smiley** button (bottom-left in the camera view) to cycle the live
-facial filter: **Big Smile** → **Crying** → off. The active filter's name
-appears briefly on screen, and the effect is baked into any photo or video you
-then capture.
+facial filter: **Big Smile** → **Crying** → **Lego Head** → off. The active
+filter's name appears briefly on screen, and the effect is baked into any photo
+or video you then capture.
 
 - **Big Smile** stretches your mouth's corners up and out into a wide grin and
   opens it vertically; the more you open your mouth, the more your teeth are
   brightened, so they "pop".
 - **Crying** curls your mouth down into a frown, pinches your inner brows down,
   and streams animated tears down your cheeks.
+- **Lego Head** covers your face with a classic yellow minifigure head — the
+  stud on top, two dot eyes and a simple painted smile — drawn straight over the
+  detected face and following it around the frame.
 
-Both filters *warp your actual face* — no cartoon mouth or eyes are pasted on
-top; only the crying tears are drawn over the image. Faces are found with a
-stock OpenCV Haar cascade, so no landmark model or `opencv_contrib` build is
-required — keeping it light enough for the Pi Zero 2 W.
+The expression filters *warp your actual face* — no cartoon mouth or eyes are
+pasted on top; only the crying tears and the whole Lego head are drawn over the
+image. Faces are found with a stock OpenCV Haar cascade, so no landmark model or
+`opencv_contrib` build is required — keeping it light enough for the Pi Zero
+2 W.
 
 ### Rotating the display
 

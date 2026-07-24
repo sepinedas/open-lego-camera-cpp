@@ -117,6 +117,45 @@ void drawTear(cv::Mat& img, float ox, float oy, float fall, float fw, float dir,
                 std::max(1, r / 3), shine, 0.85 * alpha);
 }
 
+// Grow a rectangle by `t` pixels on every side (for drawing an outline behind a
+// filled shape).
+cv::Rect expand(const cv::Rect& r, int t) {
+    return cv::Rect(r.x - t, r.y - t, r.width + 2 * t, r.height + 2 * t);
+}
+
+// Fill a rounded rectangle: the central cross plus four quarter-circle corners.
+// Used for the flat, moulded look of the Lego head and its stud.
+void fillRoundRect(cv::Mat& img, const cv::Rect& r, int rad, cv::Scalar col) {
+    if (r.width < 2 || r.height < 2) return;
+    rad = std::max(0, std::min(rad, std::min(r.width, r.height) / 2));
+    cv::rectangle(img, cv::Rect(r.x + rad, r.y, r.width - 2 * rad, r.height), col,
+                  cv::FILLED, cv::LINE_AA);
+    cv::rectangle(img, cv::Rect(r.x, r.y + rad, r.width, r.height - 2 * rad), col,
+                  cv::FILLED, cv::LINE_AA);
+    if (rad <= 0) return;
+    const cv::Point c[4] = {{r.x + rad, r.y + rad},
+                            {r.x + r.width - rad - 1, r.y + rad},
+                            {r.x + rad, r.y + r.height - rad - 1},
+                            {r.x + r.width - rad - 1, r.y + r.height - rad - 1}};
+    for (const cv::Point& p : c)
+        cv::circle(img, p, rad, col, cv::FILLED, cv::LINE_AA);
+}
+
+// Alpha-blend a filled ellipse onto a bounded ROI of `img` (soft plastic
+// highlights and shading on the Lego head).
+void blendEllipse(cv::Mat& img, cv::Point c, cv::Size ax, cv::Scalar col,
+                  double a) {
+    ax.width = std::max(1, ax.width);
+    ax.height = std::max(1, ax.height);
+    cv::Rect rc(c.x - ax.width, c.y - ax.height, 2 * ax.width + 1,
+                2 * ax.height + 1);
+    rc &= cv::Rect(0, 0, img.cols, img.rows);
+    if (rc.area() <= 0) return;
+    cv::Mat roi = img(rc), ov = roi.clone();
+    cv::ellipse(ov, c - rc.tl(), ax, 0, 0, 360, col, cv::FILLED, cv::LINE_AA);
+    cv::addWeighted(ov, a, roi, 1.0 - a, 0.0, roi);
+}
+
 // Locally reshape `img` so that the image feature at each src[i] appears to move
 // to dst[i], with a smooth Gaussian falloff of radius sig[i]. Implemented as an
 // inverse map for cv::remap: for an output pixel p the source sample is
@@ -298,6 +337,7 @@ void FaceFilter::applyRegion(cv::Mat& roi, cv::Point origin, Filter filter,
                       faceFrame.width, faceFrame.height);
         if (filter == Filter::BigSmile) applySmile(roi, face);
         else if (filter == Filter::Crying) applyCry(roi, face, phase);
+        else if (filter == Filter::LegoHead) applyLegoHead(roi, face);
     }
 }
 
@@ -422,11 +462,74 @@ void FaceFilter::applyCry(cv::Mat& frame, const cv::Rect& f, double phase) {
     drawTears(frame, f, phase);
 }
 
+void FaceFilter::applyLegoHead(cv::Mat& frame, const cv::Rect& f) const {
+    const float fw = (float)f.width, fh = (float)f.height;
+    const int cx = f.x + f.width / 2;
+
+    // Classic minifigure palette (BGR).
+    const cv::Scalar yellow(70, 200, 240);   // signature Lego yellow
+    const cv::Scalar rim(38, 120, 168);      // darker yellow: outline + shading
+    const cv::Scalar hi(120, 225, 250);      // lighter yellow: plastic highlight
+    const cv::Scalar ink(28, 28, 30);        // eyes + smile
+    const cv::Scalar glint(250, 250, 250);   // catch-light in each eye
+
+    // Head: a tall rounded brick a touch wider than the face and overhanging the
+    // chin and brow, so the real face is fully covered.
+    const int headW = std::max(8, (int)std::lround(1.04f * fw));
+    const int headTop = (int)std::lround(f.y - 0.12f * fh);
+    const int headBot = (int)std::lround(f.y + 1.06f * fh);
+    const int headH = std::max(8, headBot - headTop);
+    const cv::Rect head(cx - headW / 2, headTop, headW, headH);
+    const int rad = std::max(4, headW / 6);
+    const int t = std::max(2, headW / 40); // outline thickness
+
+    // Stud: the squat cylinder knob on top. Drawn first so the head laps over
+    // its base for a seated, moulded join.
+    const int studW = std::max(6, headW * 28 / 100);
+    const int studH = std::max(4, headH * 10 / 100);
+    const cv::Rect stud(cx - studW / 2, headTop - studH * 3 / 4, studW,
+                        studH + rad);
+    fillRoundRect(frame, expand(stud, t), std::min(studW, studH) / 2 + t, rim);
+    fillRoundRect(frame, stud, std::min(studW, studH) / 2, yellow);
+    blendEllipse(frame, {cx, stud.y + studH / 3},
+                 {studW / 2 - t, std::max(1, studH / 3)}, hi, 0.85);
+
+    // Head: dark outline behind, yellow fill in front.
+    fillRoundRect(frame, expand(head, t), rad + t, rim);
+    fillRoundRect(frame, head, rad, yellow);
+
+    // Plastic shading: a soft highlight up top-left, a soft shade along the jaw,
+    // to give the flat fill a rounded, glossy feel.
+    blendEllipse(frame, {head.x + headW / 3, headTop + headH / 4},
+                 {headW / 3, headH / 4}, hi, 0.28);
+    blendEllipse(frame, {cx, headBot - headH / 8},
+                 {headW / 2 - t, std::max(1, headH / 6)}, rim, 0.28);
+
+    // Two dot eyes with a tiny catch-light.
+    const int eyeR = std::max(2, headW * 6 / 100);
+    const int eyeY = headTop + headH * 42 / 100;
+    const int eyeDX = headW * 22 / 100;
+    for (int s = -1; s <= 1; s += 2) {
+        const cv::Point e(cx + s * eyeDX, eyeY);
+        cv::circle(frame, e, eyeR, ink, cv::FILLED, cv::LINE_AA);
+        cv::circle(frame, {e.x - eyeR / 3, e.y - eyeR / 3},
+                   std::max(1, eyeR / 3), glint, cv::FILLED, cv::LINE_AA);
+    }
+
+    // Smile: the lower arc of an ellipse (concave up) as a thick black stroke.
+    const cv::Size smile(std::max(2, headW * 15 / 100),
+                         std::max(2, headH * 11 / 100));
+    const cv::Point sc(cx, eyeY + headH * 12 / 100);
+    const int sth = std::max(2, headW * 3 / 100);
+    cv::ellipse(frame, sc, smile, 0, 20, 160, ink, sth, cv::LINE_AA);
+}
+
 Filter nextFilter(Filter f) {
     switch (f) {
         case Filter::None:     return Filter::BigSmile;
         case Filter::BigSmile: return Filter::Crying;
-        case Filter::Crying:   return Filter::None;
+        case Filter::Crying:   return Filter::LegoHead;
+        case Filter::LegoHead: return Filter::None;
     }
     return Filter::None;
 }
@@ -436,6 +539,7 @@ const char* filterName(Filter f) {
         case Filter::None:     return "Filter Off";
         case Filter::BigSmile: return "Big Smile";
         case Filter::Crying:   return "Crying";
+        case Filter::LegoHead: return "Lego Head";
     }
     return "";
 }

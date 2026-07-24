@@ -12,11 +12,12 @@ namespace olc {
 
 // Real-time, WhatsApp-style facial-expression filters.
 //
-// The face itself is *reshaped* (its pixels are pushed around with cv::remap)
-// rather than having cartoon graphics pasted over it -- a "big smile" is your
-// own mouth stretched into a grin, a "crying" face is your own mouth and brows
-// pulled into a frown. The only thing actually drawn on top of the frame are
-// the falling tears of the crying filter.
+// Most filters *reshape* the face (its pixels are pushed around with cv::remap)
+// rather than pasting cartoon graphics over it -- a "big smile" is your own
+// mouth stretched into a grin, a "crying" face is your own mouth and brows
+// pulled into a frown. The things actually drawn on top of the frame are the
+// falling tears of the crying filter and the whole Lego minifigure head, which
+// covers the face instead of warping it.
 //
 // Faces are found with a stock OpenCV Haar cascade (objdetect); no landmark
 // model or contrib module is needed, which keeps it light enough for a Pi Zero.
@@ -59,6 +60,10 @@ private:
     void detectLuma(const cv::Mat& luma);        // refresh faces_ (full-res coords)
     void applySmile(cv::Mat& frame, const cv::Rect& face);
     void applyCry(cv::Mat& frame, const cv::Rect& face, double phase);
+    // Paint a classic yellow Lego minifigure head (stud, dot eyes, smile) over
+    // the face. Unlike the reshaping filters this covers the face rather than
+    // warping it, so nothing behind the head shows through.
+    void applyLegoHead(cv::Mat& frame, const cv::Rect& face) const;
 
     // Rough 0..1 estimate of how open the mouth is, from the contrast of the
     // central mouth patch (an open mouth = dark cavity next to bright teeth).
