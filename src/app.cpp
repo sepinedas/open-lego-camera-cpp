@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <ctime>
 #include <dirent.h>
 #include <iostream>
@@ -280,6 +281,71 @@ void App::drawGalleryButton(const Button& b, Uint8 alpha) {
                          255, 255, 255, (Uint8)((int)alpha * 55 / 100));
 }
 
+// UPS HAT battery gauge, drawn in the top-right corner: a battery glyph filled
+// to the charge level (green/amber/red), a charging bolt when on power, and the
+// percentage beside it. A no-op when no INA219 sensor is present, so a plain
+// webcam build shows nothing here rather than fake numbers.
+void App::drawBatteryIndicator() {
+    if (!battery_.available()) return;
+    const auto& b = battery_.poll(SDL_GetTicks());
+    if (!b.valid) return;
+
+    // Size everything off the screen height so it scales across panels.
+    int bh = std::max(16, viewH_ / 22);
+    int bw = bh * 2;
+    int nub = std::max(2, bh / 5);
+    int margin = std::max(10, viewH_ / 36);
+
+    int bx2 = viewW_ - margin - nub; // right edge of the battery body
+    int bx1 = bx2 - bw;              // left edge
+    int by1 = margin;
+    int by2 = by1 + bh;
+
+    // Percentage label sits to the left of the glyph, vertically centred.
+    char pct[8];
+    std::snprintf(pct, sizeof(pct), "%d%%", b.percent);
+    int tscale = std::max(2, viewH_ / 200);
+    int tw = 8 * (int)std::strlen(pct) * tscale;
+    int gap = std::max(6, bh / 3);
+    int textX = bx1 - gap - tw;
+
+    // A subtle dark plate behind the whole widget keeps it legible over a bright
+    // preview.
+    roundedBoxRGBA(ren_, textX - gap, by1 - 4, bx2 + nub + 4, by2 + 4, 5,
+                   0, 0, 0, 110);
+
+    // Fill colour by charge level (charging always reads green).
+    Uint8 fr, fg, fb;
+    if (b.charging || b.percent > 50) { fr = 60; fg = 210; fb = 90; }
+    else if (b.percent > 20)          { fr = 240; fg = 190; fb = 40; }
+    else                              { fr = 235; fg = 60; fb = 60; }
+
+    // Battery outline + terminal nub.
+    roundedRectangleRGBA(ren_, bx1, by1, bx2, by2, 3, 235, 235, 235, 230);
+    int nubY = by1 + bh / 4;
+    boxRGBA(ren_, bx2 + 1, nubY, bx2 + nub, by2 - bh / 4, 235, 235, 235, 230);
+
+    // Inner fill proportional to charge.
+    int innerX1 = bx1 + 2, innerY1 = by1 + 2, innerX2 = bx2 - 2, innerY2 = by2 - 2;
+    int fillW = (int)((innerX2 - innerX1) * (b.percent / 100.0) + 0.5);
+    if (fillW > 0)
+        boxRGBA(ren_, innerX1, innerY1, innerX1 + fillW, innerY2, fr, fg, fb, 230);
+
+    // Charging bolt centred in the body.
+    if (b.charging) {
+        int cx = (bx1 + bx2) / 2, cy = (by1 + by2) / 2;
+        int hw = bh / 4, hh = bh / 3;
+        Sint16 vx[6] = {(Sint16)(cx + hw / 3), (Sint16)(cx - hw), (Sint16)cx,
+                        (Sint16)(cx - hw / 3), (Sint16)(cx + hw), (Sint16)cx};
+        Sint16 vy[6] = {(Sint16)(cy - hh), (Sint16)cy, (Sint16)cy,
+                        (Sint16)(cy + hh), (Sint16)cy, (Sint16)cy};
+        filledPolygonRGBA(ren_, vx, vy, 6, 20, 20, 24, 235);
+    }
+
+    int textY = by1 + (bh - 8 * tscale) / 2;
+    drawText(textX, textY, pct, tscale, {255, 255, 255, 235}, false);
+}
+
 // Human-readable capture time. Prefers the IMG_/VID_YYYYMMDD_HHMMSS name;
 // falls back to the file's mtime.
 static std::string captureTime(const std::string& path) {
@@ -395,6 +461,7 @@ bool App::init(const Config& cfg) {
     if (!faceFilter_.ready())
         std::cerr << "filters: no face cascade found; facial filters disabled "
                      "(install `opencv-data` or pass --face-cascade)\n";
+    if (cfg_.battery) battery_.open(cfg_.i2cBus, cfg_.batteryAddress);
     refreshThumbnail();
     menu_.wake();
     return true;
@@ -785,6 +852,7 @@ void App::renderWelcome() {
     drawText(viewW_ / 2, viewH_ - 16 - 8 * hscale, hint, hscale,
              {150, 160, 180, 200}, true);
 
+    drawBatteryIndicator(); // UPS HAT gauge, top-right
     present();
 }
 
@@ -895,6 +963,8 @@ void App::renderCamera() {
             flashStart_ = 0;
         }
     }
+
+    drawBatteryIndicator(); // UPS HAT gauge, top-right
     present();
 }
 
