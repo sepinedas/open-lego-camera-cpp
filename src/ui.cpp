@@ -51,10 +51,19 @@ Uint8 Menu::alpha() const {
 
 std::vector<Button> Menu::layout(Mode mode, int sw, int sh, bool hasVideo) const {
     switch (mode) {
+        case Mode::Welcome: {
+            // Two big labelled buttons low on the screen: Start / Sleep. Sized
+            // off the smaller dimension so they fit side by side in portrait too.
+            int r = std::max(40, std::min(sw, sh) / 8);
+            int y = sh - r - std::max(56, sh / 6); // leave room for the text label
+            int dx = r + r / 2 + 24;
+            return {{Action::StartCamera, sw / 2 - dx, y, r},
+                    {Action::Sleep, sw / 2 + dx, y, r}};
+        }
         case Mode::Camera:
-            // Zoom is pinch-to-zoom (two fingers), so the row is filter /
+            // Zoom is pinch-to-zoom (two fingers), so the row is home / filter /
             // gallery / shutter / record.
-            return row({Action::CycleFilter, Action::OpenGallery,
+            return row({Action::Home, Action::CycleFilter, Action::OpenGallery,
                         Action::Shutter, Action::Record},
                        sw, sh);
         case Mode::Gallery: {
@@ -74,7 +83,8 @@ std::vector<Button> Menu::layout(Mode mode, int sw, int sh, bool hasVideo) const
                     {Action::ConfirmYes, sw / 2 + dx, y, r}};
         }
         case Mode::Playback:
-            return {}; // tap anywhere to stop
+        case Mode::Sleep:
+            return {}; // Playback: tap to stop. Sleep: double-tap to wake.
     }
     return {};
 }

@@ -8,6 +8,11 @@ A touch-friendly, **icon-only** camera app for the **Raspberry Pi Zero 2 W**
 - Runs on a **headless Raspberry Pi** with **no desktop, X11 or Wayland** — it
   draws straight to the **HDMI** output through DRM/KMS (SDL2's `kmsdrm`
   driver, selected automatically).
+- Opens on a **welcome screen** with a **camera built from Lego bricks** and two
+  big controls: **Start Camera** and **Sleep**. Sleep blanks the screen (and, on
+  a Raspberry Pi, powers the panel off via `vcgencmd display_power` to save
+  energy on the Zero 2 W); a **double-tap** on the screen wakes it. In the camera
+  view a **home** button returns to the welcome screen.
 - Fullscreen live preview with a **translucent, auto-hiding menu**: a few
   seconds after your last tap the menu fades away; tap anywhere to bring it
   back.
@@ -28,15 +33,19 @@ A touch-friendly, **icon-only** camera app for the **Raspberry Pi Zero 2 W**
   pixels warped), not covered with cartoon graphics — only the tears are drawn
   on top. Applies live to the preview and to captured photos/videos.
 
+![Welcome screen](docs/welcome-screen.png)
+
 ![UI mockup](docs/ui-mockup.png)
 
-> The screenshot above is rendered by the offscreen mockup tool
-> (`tools/mockup.cpp`) using the exact same UI code the app runs.
+> The screenshots above are rendered by the offscreen mockup tools
+> (`tools/welcome_mockup.cpp` and `tools/mockup.cpp`) using the exact same UI
+> code the app runs.
 
 ## How it meets the brief
 
 | Requirement | How |
 | --- | --- |
+| Welcome screen with a Lego-brick camera; Start / Sleep options | `Mode::Welcome` draws `drawLegoCamera` (bricks + lens in `icons.cpp`); Sleep blanks the panel via `vcgencmd display_power` and wakes on a double-tap |
 | Runs with a webcam **or** Pi camera | `Camera` auto-detects: libcamera (GStreamer) first, then V4L2 webcam |
 | Written in C++ | C++17, CMake build |
 | Translucent, auto-hiding menu | `Menu` fades the icon row out ~3.5 s after the last tap; any tap wakes it |
@@ -207,9 +216,12 @@ on the HyperPixel) — reach for them only if taps are still off after `--rotate
 
 - Captures are saved as `IMG_YYYYMMDD_HHMMSS.jpg` and
   `VID_YYYYMMDD_HHMMSS.mp4`.
+- The app opens on the **welcome screen**; tap **Start Camera** to begin or
+  **Sleep** to blank the screen (**double-tap** to wake). The **home** icon in
+  the camera menu returns here.
 - **Tap the screen** to wake the menu after it has faded.
-- **Esc** or **Q** quits (from the camera view); in the gallery they step back
-  to the preview.
+- **Esc** or **Q** steps back one screen: camera → welcome, gallery → camera,
+  and quits from the welcome screen. Any key wakes the screen from sleep.
 - `--windowed` is handy when developing on a desktop (the app then uses the
   desktop's SDL driver automatically).
 
@@ -417,6 +429,9 @@ line.
 
 | Icon | Action |
 | --- | --- |
+| camera (welcome) | start the live camera |
+| crescent moon (welcome) | sleep — blank the screen; double-tap to wake |
+| house (camera) | back to the welcome screen |
 | last-shot thumbnail (framed-landscape icon until the first capture) | open the gallery |
 | ring with dot | take a photo (plays a shutter flash) |
 | red dot → red square | start recording → stop (turns into a stop square) |

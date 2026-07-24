@@ -13,4 +13,9 @@ namespace olc {
 void drawIcon(SDL_Renderer* ren, Action action, int cx, int cy, int r,
               Uint8 alpha, bool recording);
 
+// Draws the decorative "camera built from Lego bricks" used on the welcome
+// screen, centred at (cx, cy). `unit` is the brick-stud pitch in pixels (the
+// whole graphic scales with it); `alpha` fades it in/out as one.
+void drawLegoCamera(SDL_Renderer* ren, int cx, int cy, double unit, Uint8 alpha);
+
 } // namespace olc
