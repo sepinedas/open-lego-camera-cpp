@@ -60,10 +60,12 @@ private:
     void detectLuma(const cv::Mat& luma);        // refresh faces_ (full-res coords)
     void applySmile(cv::Mat& frame, const cv::Rect& face);
     void applyCry(cv::Mat& frame, const cv::Rect& face, double phase);
-    // Paint a classic yellow Lego minifigure head (stud, dot eyes, smile) over
-    // the face. Unlike the reshaping filters this covers the face rather than
-    // warping it, so nothing behind the head shows through.
-    void applyLegoHead(cv::Mat& frame, const cv::Rect& face) const;
+    // Paint a classic yellow Lego minifigure head over the face. It is shaded as
+    // a 3D plastic cylinder (stud, glossy highlight, form shadow) and its mouth
+    // tracks your expression: it opens with your real mouth (measured before the
+    // head covers it) and grins or goes neutral per `smiling`. Unlike the
+    // reshaping filters this covers the face rather than warping it.
+    void applyLegoHead(cv::Mat& frame, const cv::Rect& face, bool smiling) const;
 
     // Rough 0..1 estimate of how open the mouth is, from the contrast of the
     // central mouth patch (an open mouth = dark cavity next to bright teeth).
@@ -74,10 +76,13 @@ private:
     void drawTears(cv::Mat& frame, const cv::Rect& face, double phase) const;
 
     cv::CascadeClassifier face_;
+    cv::CascadeClassifier smile_;        // optional; feeds the Lego head's grin
     bool loaded_ = false;
+    bool smileLoaded_ = false;
     bool warned_ = false;                // "no cascade" logged only once
     int frameCount_ = 0;                 // detection runs every few frames
     std::vector<cv::Rect> faces_;        // last detection result, full-res
+    std::vector<unsigned char> smiling_; // per-face smile flag, parallel to faces_
 };
 
 // Cycle order for the on-screen filter button: None -> BigSmile -> Crying ->.

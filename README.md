@@ -30,8 +30,10 @@ A touch-friendly, **icon-only** camera app for the **Raspberry Pi Zero 2 W**
   stretches your mouth into a wide grin — with your teeth brightening as you
   open it — a **Crying** face that pulls your mouth and brows into a frown and
   adds animated falling **tears**, and a **Lego Head** that drops a classic
-  yellow minifigure head — stud, dot eyes and painted smile — right over your
-  face. The expression filters *reshape your face in place* (its own pixels
+  yellow minifigure head — shaded like a real 3D plastic cylinder, with a stud,
+  dot eyes and a painted mouth that **opens and grins with your own** — right
+  over your face. The expression filters *reshape your face in place* (its own
+  pixels
   warped) rather than pasting cartoon graphics on it; only the tears and the
   Lego head are drawn on top. Applies live to the preview and to captured
   photos/videos.
@@ -194,15 +196,20 @@ or video you then capture.
   brightened, so they "pop".
 - **Crying** curls your mouth down into a frown, pinches your inner brows down,
   and streams animated tears down your cheeks.
-- **Lego Head** covers your face with a classic yellow minifigure head — the
-  stud on top, two dot eyes and a simple painted smile — drawn straight over the
-  detected face and following it around the frame.
+- **Lego Head** covers your face with a classic yellow minifigure head, drawn
+  straight over the detected face and following it around the frame. It is
+  shaded like a real **3D plastic cylinder** — a glossy highlight down the lit
+  side, a form shadow on the other, a rounded crown and a moulded stud — and its
+  face **matches your expression**: the painted mouth opens into a dark cavity
+  as you open your own (using the same mouth-openness read as Big Smile) and
+  grins or stays neutral to match your smile (via the stock `haarcascade_smile`
+  cascade, when present).
 
-The expression filters *warp your actual face* — no cartoon mouth or eyes are
-pasted on top; only the crying tears and the whole Lego head are drawn over the
-image. Faces are found with a stock OpenCV Haar cascade, so no landmark model or
-`opencv_contrib` build is required — keeping it light enough for the Pi Zero
-2 W.
+The Big Smile and Crying filters *warp your actual face* — no cartoon mouth or
+eyes are pasted on top; only the crying tears and the whole Lego head are drawn
+over the image. Faces (and, for the Lego head, smiles) are found with stock
+OpenCV Haar cascades, so no landmark model or `opencv_contrib` build is
+required — keeping it light enough for the Pi Zero 2 W.
 
 ### Rotating the display
 

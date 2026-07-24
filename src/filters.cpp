@@ -27,6 +27,16 @@ const char* kCascadePaths[] = {
     "/usr/share/OpenCV/haarcascades/haarcascade_frontalface_default.xml",
 };
 
+// The stock smile cascade, shipped alongside the face one. Used only by the
+// Lego-head filter to decide whether the painted mouth grins or stays neutral;
+// if it is missing the head simply defaults to a friendly smile.
+const char* kSmilePaths[] = {
+    "/usr/share/opencv4/haarcascades/haarcascade_smile.xml",
+    "/usr/share/opencv/haarcascades/haarcascade_smile.xml",
+    "/usr/local/share/opencv4/haarcascades/haarcascade_smile.xml",
+    "/usr/share/OpenCV/haarcascades/haarcascade_smile.xml",
+};
+
 float clamp01(float v) { return v < 0.f ? 0.f : (v > 1.f ? 1.f : v); }
 
 // Alpha-blend a filled circle onto a bounded ROI of `img` (keeps the cost of
@@ -156,6 +166,54 @@ void blendEllipse(cv::Mat& img, cv::Point c, cv::Size ax, cv::Scalar col,
     cv::addWeighted(ov, a, roi, 1.0 - a, 0.0, roi);
 }
 
+// Fill a rounded rect with cylinder shading so a flat yellow head reads as a
+// 3D plastic cylinder. Brightness varies across the width like a real cylinder
+// lit from `lightX` (a horizontal light direction, -1 = from the left): bright
+// down a vertical strip, falling off to a form shadow at the far edge. `topLift`
+// brightens the crown a touch and shades the chin, giving the moulded top some
+// roundness too. Everything is confined to the rounded-rect silhouette so the
+// shading never bleeds past the head.
+void fillCylinder(cv::Mat& img, const cv::Rect& r, int rad, const cv::Vec3f& base,
+                  float lightX, float topLift) {
+    cv::Rect ir = r & cv::Rect(0, 0, img.cols, img.rows);
+    if (ir.area() <= 0 || r.width < 2 || r.height < 2) return;
+    rad = std::max(0, std::min(rad, std::min(r.width, r.height) / 2));
+
+    cv::Mat mask(r.size(), CV_8U, cv::Scalar(0));
+    fillRoundRect(mask, cv::Rect(0, 0, r.width, r.height), rad, cv::Scalar(255));
+
+    // Per-column Lambert term for a vertical cylinder: normal = (nx, 0, nz).
+    const float halfW = r.width * 0.5f;
+    const float lz = std::sqrt(std::max(0.f, 1.f - lightX * lightX));
+    std::vector<float> colf(r.width);
+    for (int x = 0; x < r.width; ++x) {
+        float nx = (x + 0.5f - halfW) / std::max(1.f, halfW); // -1..1 across width
+        nx = std::max(-1.f, std::min(1.f, nx));
+        float nz = std::sqrt(std::max(0.f, 1.f - nx * nx));
+        colf[x] = 0.62f + 0.55f * (nx * lightX + nz * lz);
+    }
+
+    cv::Mat overlay(r.size(), CV_8UC3);
+    for (int y = 0; y < r.height; ++y) {
+        float v = (float)y / std::max(1, r.height - 1);      // 0 top .. 1 bottom
+        float rowf = 1.f + topLift * (0.5f - v) * 0.5f;      // lift crown, shade chin
+        cv::Vec3b* o = overlay.ptr<cv::Vec3b>(y);
+        for (int x = 0; x < r.width; ++x) {
+            float m = colf[x] * rowf;
+            for (int c = 0; c < 3; ++c) {
+                // m > 1 lifts the channel toward white (specular), m < 1 darkens
+                // it toward the form shadow.
+                float outc = (m >= 1.f)
+                    ? base[c] + (255.f - base[c]) * std::min(1.f, (m - 1.f) * 1.7f)
+                    : base[c] * std::max(0.15f, m);
+                o[x][c] = cv::saturate_cast<uchar>(outc);
+            }
+        }
+    }
+    cv::Rect local(ir.x - r.x, ir.y - r.y, ir.width, ir.height);
+    overlay(local).copyTo(img(ir), mask(local));
+}
+
 // Locally reshape `img` so that the image feature at each src[i] appears to move
 // to dst[i], with a smooth Gaussian falloff of radius sig[i]. Implemented as an
 // inverse map for cv::remap: for an output pixel p the source sample is
@@ -225,6 +283,12 @@ FaceFilter::FaceFilter() {
             break;
         }
     }
+    for (const char* p : kSmilePaths) {
+        if (smile_.load(p)) {
+            smileLoaded_ = true;
+            break;
+        }
+    }
 }
 
 void FaceFilter::setCascade(const std::string& path) {
@@ -255,11 +319,30 @@ void FaceFilter::detectLuma(const cv::Mat& luma) {
     face_.detectMultiScale(small, found, 1.2, 4, 0, cv::Size(minSide, minSide));
 
     faces_.clear();
+    smiling_.clear();
     double inv = 1.0 / scale;
-    for (const cv::Rect& r : found)
+    for (const cv::Rect& r : found) {
         faces_.emplace_back((int)std::lround(r.x * inv), (int)std::lround(r.y * inv),
                             (int)std::lround(r.width * inv),
                             (int)std::lround(r.height * inv));
+        // Whether this face is smiling drives the Lego head's painted mouth. The
+        // smile cascade runs on the lower half of the (already downscaled,
+        // equalised) face. With no cascade we default to a smile.
+        unsigned char sm = 1;
+        if (smileLoaded_) {
+            cv::Rect lower(r.x, r.y + r.height / 2, r.width, r.height / 2);
+            lower &= cv::Rect(0, 0, small.cols, small.rows);
+            sm = 0;
+            if (lower.area() > 0) {
+                std::vector<cv::Rect> smiles;
+                int sMin = std::max(12, r.width / 4);
+                smile_.detectMultiScale(small(lower), smiles, 1.7, 20, 0,
+                                        cv::Size(sMin, sMin));
+                sm = smiles.empty() ? 0 : 1;
+            }
+        }
+        smiling_.push_back(sm);
+    }
 }
 
 void FaceFilter::apply(cv::Mat& frame, Filter filter, double phase) {
@@ -328,7 +411,8 @@ cv::Rect FaceFilter::dirtyRegion(Filter filter, int w, int h) const {
 void FaceFilter::applyRegion(cv::Mat& roi, cv::Point origin, Filter filter,
                              double phase) {
     if (filter == Filter::None || roi.empty() || roi.type() != CV_8UC3) return;
-    for (const cv::Rect& faceFrame : faces_) {
+    for (size_t i = 0; i < faces_.size(); ++i) {
+        const cv::Rect& faceFrame = faces_[i];
         // Skip faces too small to reshape cleanly.
         if (faceFrame.width < 40 || faceFrame.height < 40) continue;
         // Face rect in roi-local coords. The reshaping helpers clip to roi's
@@ -337,7 +421,10 @@ void FaceFilter::applyRegion(cv::Mat& roi, cv::Point origin, Filter filter,
                       faceFrame.width, faceFrame.height);
         if (filter == Filter::BigSmile) applySmile(roi, face);
         else if (filter == Filter::Crying) applyCry(roi, face, phase);
-        else if (filter == Filter::LegoHead) applyLegoHead(roi, face);
+        else if (filter == Filter::LegoHead) {
+            bool smiling = (i < smiling_.size()) ? smiling_[i] != 0 : true;
+            applyLegoHead(roi, face, smiling);
+        }
     }
 }
 
@@ -462,16 +549,22 @@ void FaceFilter::applyCry(cv::Mat& frame, const cv::Rect& f, double phase) {
     drawTears(frame, f, phase);
 }
 
-void FaceFilter::applyLegoHead(cv::Mat& frame, const cv::Rect& f) const {
+void FaceFilter::applyLegoHead(cv::Mat& frame, const cv::Rect& f,
+                               bool smiling) const {
     const float fw = (float)f.width, fh = (float)f.height;
     const int cx = f.x + f.width / 2;
 
-    // Classic minifigure palette (BGR).
-    const cv::Scalar yellow(70, 200, 240);   // signature Lego yellow
-    const cv::Scalar rim(38, 120, 168);      // darker yellow: outline + shading
-    const cv::Scalar hi(120, 225, 250);      // lighter yellow: plastic highlight
-    const cv::Scalar ink(28, 28, 30);        // eyes + smile
-    const cv::Scalar glint(250, 250, 250);   // catch-light in each eye
+    // Read the *real* mouth before the head covers it, so the minifigure's mouth
+    // opens and closes with yours (0 = shut, 1 = wide open).
+    const float open = mouthOpenness(frame, f);
+
+    // Classic minifigure palette (BGR). `base*` are the flat colours; the
+    // cylinder shader derives the highlights and form shadows from them.
+    const cv::Vec3f baseYellow(60.f, 196.f, 240.f); // signature Lego yellow
+    const cv::Scalar rim(30, 110, 160);             // dark yellow outline
+    const cv::Scalar ink(26, 26, 30);               // eyes + mouth
+    const cv::Scalar glint(250, 250, 250);          // catch-light / teeth
+    const float lightX = -0.5f;                     // key light from upper-left
 
     // Head: a tall rounded brick a touch wider than the face and overhanging the
     // chin and brow, so the real face is fully covered.
@@ -484,30 +577,32 @@ void FaceFilter::applyLegoHead(cv::Mat& frame, const cv::Rect& f) const {
     const int t = std::max(2, headW / 40); // outline thickness
 
     // Stud: the squat cylinder knob on top. Drawn first so the head laps over
-    // its base for a seated, moulded join.
+    // its base for a seated, moulded join. Shaded as its own little cylinder.
     const int studW = std::max(6, headW * 28 / 100);
     const int studH = std::max(4, headH * 10 / 100);
     const cv::Rect stud(cx - studW / 2, headTop - studH * 3 / 4, studW,
                         studH + rad);
     fillRoundRect(frame, expand(stud, t), std::min(studW, studH) / 2 + t, rim);
-    fillRoundRect(frame, stud, std::min(studW, studH) / 2, yellow);
+    fillCylinder(frame, stud, std::min(studW, studH) / 2, baseYellow, lightX, 0.2f);
     blendEllipse(frame, {cx, stud.y + studH / 3},
-                 {studW / 2 - t, std::max(1, studH / 3)}, hi, 0.85);
+                 {studW / 2 - t, std::max(1, studH / 3)},
+                 cv::Scalar(150, 235, 252), 0.55); // lit top face of the stud
 
-    // Head: dark outline behind, yellow fill in front.
+    // Head: dark outline behind, then the shaded yellow cylinder in front.
     fillRoundRect(frame, expand(head, t), rad + t, rim);
-    fillRoundRect(frame, head, rad, yellow);
+    fillCylinder(frame, head, rad, baseYellow, lightX, 0.5f);
 
-    // Plastic shading: a soft highlight up top-left, a soft shade along the jaw,
-    // to give the flat fill a rounded, glossy feel.
-    blendEllipse(frame, {head.x + headW / 3, headTop + headH / 4},
-                 {headW / 3, headH / 4}, hi, 0.28);
-    blendEllipse(frame, {cx, headBot - headH / 8},
-                 {headW / 2 - t, std::max(1, headH / 6)}, rim, 0.28);
+    // A crisp glossy specular streak up the light side and a soft occlusion in
+    // the shadow at the jaw -- the finishing touches that sell the 3D plastic.
+    blendEllipse(frame, {head.x + headW * 30 / 100, headTop + headH * 30 / 100},
+                 {std::max(2, headW / 10), headH * 3 / 10},
+                 cv::Scalar(240, 250, 255), 0.30);
+    blendEllipse(frame, {cx + headW / 6, headBot - headH / 9},
+                 {headW / 3, std::max(1, headH / 7)}, rim, 0.28);
 
     // Two dot eyes with a tiny catch-light.
     const int eyeR = std::max(2, headW * 6 / 100);
-    const int eyeY = headTop + headH * 42 / 100;
+    const int eyeY = headTop + headH * 40 / 100;
     const int eyeDX = headW * 22 / 100;
     for (int s = -1; s <= 1; s += 2) {
         const cv::Point e(cx + s * eyeDX, eyeY);
@@ -516,12 +611,29 @@ void FaceFilter::applyLegoHead(cv::Mat& frame, const cv::Rect& f) const {
                    std::max(1, eyeR / 3), glint, cv::FILLED, cv::LINE_AA);
     }
 
-    // Smile: the lower arc of an ellipse (concave up) as a thick black stroke.
-    const cv::Size smile(std::max(2, headW * 15 / 100),
-                         std::max(2, headH * 11 / 100));
-    const cv::Point sc(cx, eyeY + headH * 12 / 100);
-    const int sth = std::max(2, headW * 3 / 100);
-    cv::ellipse(frame, sc, smile, 0, 20, 160, ink, sth, cv::LINE_AA);
+    // Mouth: matches your real expression. `o` ramps 0..1 as your own mouth
+    // opens (soft, so a resting mouth stays a line and it never snaps open), and
+    // `smiling` decides between a grin and a neutral line.
+    const cv::Point mouth(cx, eyeY + headH * 24 / 100);
+    const float o = clamp01((open - 0.30f) / 0.45f);
+    if (o > 0.06f) {
+        // Open mouth: a dark oral cavity that grows with how wide you open.
+        const int mw = std::max(3, (int)(headW * (0.14f + 0.11f * o)));
+        const int mh = std::max(2, (int)(headH * (0.03f + 0.15f * o)));
+        cv::ellipse(frame, mouth, {mw, mh}, 0, 0, 360, ink, cv::FILLED, cv::LINE_AA);
+        if (smiling && mh >= 4) // a bright band of teeth along the top of a grin
+            cv::ellipse(frame, {mouth.x, mouth.y - mh / 2},
+                        {mw * 3 / 4, std::max(1, mh / 4)}, 0, 0, 360, glint,
+                        cv::FILLED, cv::LINE_AA);
+    } else {
+        // Closed mouth: a curved stroke -- a happy upturn, or a near-flat line
+        // when you are not smiling.
+        const float curve = smiling ? 1.0f : 0.25f;
+        const cv::Size ax(std::max(2, headW * 15 / 100),
+                          std::max(1, (int)(headH * (0.04f + 0.07f * curve))));
+        const int sth = std::max(2, headW * 3 / 100);
+        cv::ellipse(frame, mouth, ax, 0, 20, 160, ink, sth, cv::LINE_AA);
+    }
 }
 
 Filter nextFilter(Filter f) {
