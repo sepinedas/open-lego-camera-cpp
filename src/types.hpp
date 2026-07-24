@@ -6,10 +6,12 @@ namespace olc {
 
 // The high-level screen the app is currently on.
 enum class Mode {
+    Welcome,       // start screen: Lego-brick camera + Start / Sleep options
     Camera,        // live preview + capture controls
     Gallery,       // browse captured photos/videos
     Playback,      // playing a video from the gallery
     ConfirmDelete, // icon-only yes/no before deleting
+    Sleep,         // display blanked (screen off); double-tap to wake
 };
 
 // Every tappable control maps to exactly one action.
@@ -28,6 +30,9 @@ enum class Action {
     ConfirmYes,  // confirm deletion
     ConfirmNo,   // cancel deletion
     CycleFilter, // cycle the live facial-expression filter
+    StartCamera, // welcome -> live camera
+    Sleep,       // welcome -> blank the screen (display sleep)
+    Home,        // camera -> welcome screen
     Quit,
 };
 

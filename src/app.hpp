@@ -71,8 +71,17 @@ private:
     void capturePhoto();
     void toggleRecording();
     void playCurrentVideo();
+    void goHome();          // leave the camera for the welcome screen
+    void enterSleep();      // blank the screen (and power the panel off on a Pi)
+    void wakeFromSleep();   // restore the display and return to the welcome screen
+    // Toggle the Pi display output (vcgencmd display_power). Best-effort: returns
+    // false where the command is unavailable (e.g. a desktop), so callers know
+    // whether the panel was actually powered down.
+    bool setDisplayPower(bool on);
 
     // --- per-mode rendering ---
+    void renderWelcome();   // Lego-brick camera + Start / Sleep controls
+    void renderSleep();     // black screen while asleep
     void renderCamera();
     // Preview with a facial filter while keeping the frame in NV12: reshape only
     // the face region(s) on the CPU and let the GPU convert and zoom the rest.
@@ -100,8 +109,13 @@ private:
     int viewW_ = 0, viewH_ = 0;         // logical UI size (swapped for 90/270)
     int rotate_ = 0;                    // UI rotation in degrees clockwise
 
-    Mode mode_ = Mode::Camera;
+    Mode mode_ = Mode::Welcome;
     bool running_ = true;
+
+    // Display-sleep state (Welcome -> Sleep). displayOff_ tracks whether the
+    // panel was actually powered down; lastSleepTapMs_ times the wake double-tap.
+    bool displayOff_ = false;
+    Uint32 lastSleepTapMs_ = 0;
 
     // Live facial-expression filter (cycled by the smiley button).
     Filter filter_ = Filter::None;

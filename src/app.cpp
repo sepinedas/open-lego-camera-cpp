@@ -421,9 +421,13 @@ void App::pumpEvents() {
                 running_ = false;
                 break;
             case SDL_KEYDOWN:
-                if (e.key.keysym.sym == SDLK_ESCAPE || e.key.keysym.sym == SDLK_q) {
-                    if (mode_ == Mode::Camera) running_ = false;
-                    else mode_ = Mode::Camera; // step back to preview
+                if (mode_ == Mode::Sleep) {
+                    wakeFromSleep(); // any key wakes the screen
+                } else if (e.key.keysym.sym == SDLK_ESCAPE ||
+                           e.key.keysym.sym == SDLK_q) {
+                    if (mode_ == Mode::Welcome) running_ = false; // quit the app
+                    else if (mode_ == Mode::Camera) goHome();     // back to welcome
+                    else mode_ = Mode::Camera;                    // step back to preview
                 } else {
                     menu_.wake();
                 }
@@ -529,6 +533,26 @@ void App::handleFingerUp(const SDL_TouchFingerEvent& f) {
 }
 
 void App::onTap(int x, int y) {
+    if (mode_ == Mode::Sleep) {
+        // Wake only on a double-tap, so a stray touch keeps the screen asleep.
+        Uint32 now = SDL_GetTicks();
+        if (lastSleepTapMs_ && now - lastSleepTapMs_ < 600) {
+            wakeFromSleep();
+            lastSleepTapMs_ = 0;
+        } else {
+            lastSleepTapMs_ = now;
+        }
+        return;
+    }
+
+    if (mode_ == Mode::Welcome) {
+        // Welcome buttons are always shown, so a tap acts immediately.
+        menu_.wake();
+        auto btns = menu_.layout(Mode::Welcome, viewW_, viewH_, false);
+        dispatch(Menu::hitTest(btns, x, y));
+        return;
+    }
+
     if (mode_ == Mode::ConfirmDelete) {
         auto btns = menu_.layout(mode_, viewW_, viewH_, false);
         Action a = Menu::hitTest(btns, x, y);
@@ -572,6 +596,16 @@ void App::dispatch(Action a) {
         case Action::CycleFilter:
             filter_ = nextFilter(filter_);
             filterLabelUntil_ = SDL_GetTicks() + 1500;
+            break;
+        case Action::StartCamera:
+            mode_ = Mode::Camera;
+            menu_.wake();
+            break;
+        case Action::Sleep:
+            enterSleep();
+            break;
+        case Action::Home:
+            goHome();
             break;
         case Action::Quit:
             running_ = false;
@@ -660,9 +694,110 @@ void App::playCurrentVideo() {
     menu_.wake();
 }
 
+// Leave the live camera and return to the welcome screen. Stop any recording
+// first so we never leave a dangling video writer running in the background.
+void App::goHome() {
+    if (recorder_.recording()) {
+        recorder_.stop();
+        refreshThumbnail();
+    }
+    mode_ = Mode::Welcome;
+    menu_.wake();
+}
+
+// Toggle the display output on a Raspberry Pi. Best-effort: silently no-ops
+// (returning false) wherever vcgencmd isn't present, e.g. a desktop session.
+bool App::setDisplayPower(bool on) {
+    std::string cmd = std::string("vcgencmd display_power ") + (on ? "1" : "0") +
+                      " >/dev/null 2>&1";
+    int rc = std::system(cmd.c_str());
+    return rc == 0;
+}
+
+// Blank the screen and, on a Pi, power the panel down to save energy on the
+// Zero 2 W. Wakes on a double-tap (see onTap) or any key.
+void App::enterSleep() {
+    mode_ = Mode::Sleep;
+    lastSleepTapMs_ = 0;
+    // Flush a black frame first so nothing lingers if the panel stays powered.
+    beginFrame();
+    clear();
+    present();
+    displayOff_ = setDisplayPower(false);
+    std::cout << (displayOff_ ? "display: panel powered off (sleep)\n"
+                              : "display: screen blanked (sleep)\n");
+}
+
+// Restore the display and go back to the welcome screen.
+void App::wakeFromSleep() {
+    if (displayOff_) {
+        setDisplayPower(true);
+        displayOff_ = false;
+    }
+    mode_ = Mode::Welcome;
+    menu_.wake();
+    std::cout << "display: woke from sleep\n";
+}
+
 // ---------------------------------------------------------------------------
 // Per-mode rendering
 // ---------------------------------------------------------------------------
+
+// Start screen: a camera built from Lego bricks, a title, and two big controls
+// -- Start Camera and Sleep -- with text labels.
+void App::renderWelcome() {
+    beginFrame();
+
+    // Background: a soft vertical gradient from deep blue to near-black.
+    for (int y = 0; y < viewH_; ++y) {
+        double f = viewH_ > 1 ? (double)y / (viewH_ - 1) : 0.0;
+        Uint8 r = (Uint8)(18 * (1 - f) + 6 * f);
+        Uint8 g = (Uint8)(22 * (1 - f) + 7 * f);
+        Uint8 b = (Uint8)(44 * (1 - f) + 14 * f);
+        SDL_SetRenderDrawColor(ren_, r, g, b, 255);
+        SDL_RenderDrawLine(ren_, 0, y, viewW_, y);
+    }
+
+    // Title, scaled to fit ~86% of the width.
+    const std::string title = "OPEN LEGO CAMERA";
+    int fitW = (int)(viewW_ * 0.86 / (8 * (int)title.size()));
+    int tscale = std::max(2, std::min({fitW, viewH_ / 60, 6}));
+    int titleY = std::max(14, viewH_ / 14);
+    drawText(viewW_ / 2, titleY, title, tscale, {255, 214, 40, 245}, true);
+
+    // The Lego-brick camera, centred in the upper-middle of the screen.
+    double unit = std::min(viewW_ / 13.0, viewH_ / 12.0);
+    drawLegoCamera(ren_, viewW_ / 2, (int)(viewH_ * 0.42), unit, 255);
+
+    // Two always-visible controls with labels beneath them.
+    auto btns = menu_.layout(Mode::Welcome, viewW_, viewH_, false);
+    for (const auto& b : btns) Menu::drawButton(ren_, b, 255, false);
+    int lscale = std::max(2, std::min(viewH_ / 220, 3));
+    for (const auto& b : btns) {
+        const char* label = (b.action == Action::StartCamera) ? "START" : "SLEEP";
+        drawText(b.cx, b.cy + b.r + 12, label, lscale, {255, 255, 255, 235}, true);
+    }
+
+    // Footer hint about waking from sleep.
+    const std::string hint = "DOUBLE-TAP SCREEN TO WAKE FROM SLEEP";
+    int hFit = (int)(viewW_ * 0.9 / (8 * (int)hint.size()));
+    int hscale = std::max(1, std::min(hFit, 2));
+    drawText(viewW_ / 2, viewH_ - 16 - 8 * hscale, hint, hscale,
+             {150, 160, 180, 200}, true);
+
+    present();
+}
+
+// Asleep: keep the screen black. When the panel is genuinely powered off we
+// avoid re-presenting; otherwise we hold a black frame. Idle to spare the CPU.
+void App::renderSleep() {
+    if (!displayOff_) {
+        beginFrame();
+        clear();
+        present();
+    }
+    SDL_Delay(80);
+}
 
 void App::renderCamera() {
     cv::Mat frame;
@@ -860,6 +995,12 @@ int App::run() {
         if (!running_) break;
 
         switch (mode_) {
+            case Mode::Welcome:
+                renderWelcome();
+                break;
+            case Mode::Sleep:
+                renderSleep();
+                break;
             case Mode::Camera:
                 renderCamera();
                 break;
