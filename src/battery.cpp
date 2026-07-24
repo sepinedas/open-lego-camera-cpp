@@ -61,31 +61,35 @@ bool BatteryMonitor::open(int bus, int address) {
     std::snprintf(path, sizeof(path), "/dev/i2c-%d", bus);
     fd_ = ::open(path, O_RDWR);
     if (fd_ < 0) {
-        std::cerr << "battery: no INA219 on " << path << " (" << std::strerror(errno)
-                  << "); indicator disabled\n";
+        std::cerr << "battery: cannot open " << path << " (" << std::strerror(errno)
+                  << "); indicator disabled. Enable I2C (raspi-config -> Interface "
+                     "Options -> I2C) and add your user to the `i2c` group.\n";
         return false;
     }
-    if (::ioctl(fd_, I2C_SLAVE, address) < 0) {
-        std::cerr << "battery: cannot address INA219 at 0x" << std::hex << address
-                  << std::dec << " (" << std::strerror(errno)
-                  << "); indicator disabled\n";
-        ::close(fd_);
-        fd_ = -1;
-        return false;
+
+    // Try the requested address first, then the other common INA219 addresses so
+    // a board strapped to a different one still lights up. INA219 has no device-ID
+    // register, so "responds" means: point at the config register, program it,
+    // read it back, and require an ACK on every step.
+    int candidates[] = {address, 0x40, 0x41, 0x42, 0x43, 0x44, 0x45};
+    for (int addr : candidates) {
+        if (::ioctl(fd_, I2C_SLAVE, addr) < 0) continue;
+        uint16_t probe = 0;
+        if (writeReg(kRegCalibration, kCalibration) && writeReg(kRegConfig, kConfig) &&
+            readReg(kRegConfig, probe) && probe == kConfig) {
+            std::cout << "battery: INA219 ready on " << path << " at 0x" << std::hex
+                      << addr << std::dec << "\n";
+            return true;
+        }
     }
-    // Program calibration then config, and confirm the sensor actually answers.
-    uint16_t probe = 0;
-    if (!writeReg(kRegCalibration, kCalibration) || !writeReg(kRegConfig, kConfig) ||
-        !readReg(kRegConfig, probe)) {
-        std::cerr << "battery: INA219 at 0x" << std::hex << address << std::dec
-                  << " did not respond; indicator disabled\n";
-        ::close(fd_);
-        fd_ = -1;
-        return false;
-    }
-    std::cout << "battery: INA219 ready on " << path << " at 0x" << std::hex
-              << address << std::dec << "\n";
-    return true;
+
+    std::cerr << "battery: no INA219 responded on " << path << " (tried 0x"
+              << std::hex << address
+              << " then 0x40-0x45); indicator disabled. Check wiring and run "
+                 "`i2cdetect -y " << std::dec << bus << "`.\n";
+    ::close(fd_);
+    fd_ = -1;
+    return false;
 }
 
 bool BatteryMonitor::refresh() {

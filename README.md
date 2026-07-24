@@ -199,14 +199,21 @@ pack drains and shows a **charging bolt** while it's on power.
 
 Enable I2C once on the Pi (`raspi-config` → *Interface Options* → *I2C*, or add
 `dtparam=i2c_arm=on` to `/boot/firmware/config.txt`), and make sure your user is
-in the `i2c` group so `/dev/i2c-1` is readable. The default address is `0x43`
-(the Pi-Zero *UPS HAT (C)*); the full-size *UPS HAT* uses `0x42` — pass
-`--battery-address 0x42` for it, or `--i2c-bus N` for a non-default bus.
+in the `i2c` group so `/dev/i2c-1` is readable. The app tries `0x43` (the
+Pi-Zero *UPS HAT (C)*) first and then **auto-probes the other common INA219
+addresses `0x40`–`0x45`**, so most boards just work; pass
+`--battery-address 0xNN` to force a specific one, or `--i2c-bus N` for a
+non-default bus.
 
 The monitor **fails soft**: if the bus or sensor can't be reached (no HAT
 fitted, or running on a desktop/webcam box), the app logs one line and hides the
 indicator rather than showing fake numbers. Use `--no-battery` to turn it off
 outright.
+
+**If the gauge doesn't appear**, check the app's startup log for a line
+beginning with `battery:` — it says whether the sensor was found, or points at
+the fix (enable I2C, join the `i2c` group, or check wiring with
+`i2cdetect -y 1`).
 
 The charge estimate maps a single Li-ion cell's `3.0 V` (empty) → `4.2 V` (full)
 onto 0–100 %, reading the INA219's bus-voltage register directly.

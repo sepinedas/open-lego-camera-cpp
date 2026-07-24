@@ -28,10 +28,12 @@ public:
     BatteryMonitor& operator=(const BatteryMonitor&) = delete;
 
     // Open the I2C device and initialise the INA219. `bus` is the /dev/i2c-N
-    // index (1 on a modern Pi); `address` is the 7-bit I2C address (0x43 for the
-    // Pi-Zero-sized "UPS HAT (C)", 0x42 for the full-size "UPS HAT"). Returns
-    // false -- leaving the monitor unavailable -- if the device can't be opened
-    // or the sensor doesn't respond.
+    // index (1 on a modern Pi); `address` is the 7-bit I2C address to try first
+    // (0x43 for the Pi-Zero-sized "UPS HAT (C)", 0x42 for the full-size "UPS
+    // HAT"). If nothing answers there we auto-probe the other common INA219
+    // addresses (0x40..0x45), so a board wired to a different one still works.
+    // Returns false -- leaving the monitor unavailable -- if the bus can't be
+    // opened or no INA219 responds anywhere.
     bool open(int bus, int address);
 
     // True once the sensor has been opened and configured.
