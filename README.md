@@ -26,6 +26,12 @@ A touch-friendly, **icon-only** camera app for the **Raspberry Pi Zero 2 W**
 - Built-in **gallery**: browse captured photos and videos, **play** videos
   back, and **delete** them behind an icon-only ✓ / ✗ confirmation. The
   capture **date & time** is shown translucent across the top.
+- **Battery monitor** for a **UPS HAT** (Waveshare-style, INA219 over I2C): a
+  small battery gauge in the **top-right** corner shows the charge level
+  (green → amber → red) and a **charging bolt** when it's on power. It reads the
+  INA219 directly over `/dev/i2c-*` and **fails soft** — with no HAT fitted (or
+  on a plain webcam box) the indicator is simply hidden. Disable it with
+  `--no-battery`.
 - **WhatsApp-style facial filters** (smiley button): a **Big Smile** that
   stretches your mouth into a wide grin — with your teeth brightening as you
   open it — and a **Crying** face that pulls your mouth and brows into a frown
@@ -53,6 +59,7 @@ A touch-friendly, **icon-only** camera app for the **Raspberry Pi Zero 2 W**
 | Icon-only buttons, no text | all icons are drawn as vector shapes (`icons.cpp`, SDL2_gfx) |
 | Headless — no X11 / window manager | SDL2 `kmsdrm`/`fbcon` renders directly to HDMI |
 | WhatsApp-style facial filters | `FaceFilter` finds the face (Haar cascade) and warps the mouth/brows with `cv::remap`; the crying filter also draws tears (`filters.cpp`) |
+| UPS HAT battery monitor | `BatteryMonitor` reads the INA219 over `/dev/i2c-*` and `App::drawBatteryIndicator` renders the top-right gauge (`battery.cpp`) |
 
 ## Dependencies
 
@@ -176,8 +183,33 @@ build/open-lego-camera [options]
   --windowed                   run in a window instead of fullscreen
   --no-audio                   record video without sound
   --face-cascade PATH          Haar face-cascade XML for the facial filters
+  --i2c-bus N                  I2C bus the UPS HAT is on (default: 1)
+  --battery-address ADDR       INA219 I2C address (default: 0x43; use 0x42
+                               for the full-size UPS HAT)
+  --no-battery                 hide the UPS HAT battery indicator
   --help                       show this help
 ```
+
+### UPS HAT battery monitor
+
+If you fit a Waveshare-style **UPS HAT** (any board built around a **INA219**
+current/voltage monitor, e.g. the Pi-Zero-sized *UPS HAT (C)*), a small battery
+gauge appears in the **top-right** corner: it fills from green to red as the
+pack drains and shows a **charging bolt** while it's on power.
+
+Enable I2C once on the Pi (`raspi-config` → *Interface Options* → *I2C*, or add
+`dtparam=i2c_arm=on` to `/boot/firmware/config.txt`), and make sure your user is
+in the `i2c` group so `/dev/i2c-1` is readable. The default address is `0x43`
+(the Pi-Zero *UPS HAT (C)*); the full-size *UPS HAT* uses `0x42` — pass
+`--battery-address 0x42` for it, or `--i2c-bus N` for a non-default bus.
+
+The monitor **fails soft**: if the bus or sensor can't be reached (no HAT
+fitted, or running on a desktop/webcam box), the app logs one line and hides the
+indicator rather than showing fake numbers. Use `--no-battery` to turn it off
+outright.
+
+The charge estimate maps a single Li-ion cell's `3.0 V` (empty) → `4.2 V` (full)
+onto 0–100 %, reading the INA219's bus-voltage register directly.
 
 ### Facial filters
 

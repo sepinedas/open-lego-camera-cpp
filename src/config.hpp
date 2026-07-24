@@ -22,6 +22,9 @@ struct Config {
     int width = 1280;        // requested preview width
     int height = 720;        // requested preview height
     std::string faceCascade; // override path to the Haar face cascade XML
+    bool battery = true;     // show the UPS HAT battery indicator (INA219 over I2C)
+    int i2cBus = 1;          // /dev/i2c-N bus the UPS HAT sits on
+    int batteryAddress = 0x43; // INA219 address (0x43 UPS HAT C / Pi Zero, 0x42 full-size)
 };
 
 // Parse argv. Returns false and prints usage on --help or a bad flag; sets

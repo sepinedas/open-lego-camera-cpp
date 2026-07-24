@@ -65,6 +65,11 @@ static void printUsage(const char* prog) {
         "  --no-audio                   record video without sound\n"
         "  --face-cascade PATH          Haar face-cascade XML for the facial\n"
         "                               filters (default: system opencv-data)\n"
+        "  --i2c-bus N                  I2C bus the UPS HAT is on (default: 1)\n"
+        "  --battery-address ADDR       INA219 I2C address (default: 0x43 for the\n"
+        "                               Pi-Zero UPS HAT C; use 0x42 for the\n"
+        "                               full-size UPS HAT)\n"
+        "  --no-battery                 hide the UPS HAT battery indicator\n"
         "  --help                       show this help\n";
 }
 
@@ -149,6 +154,19 @@ bool parseArgs(int argc, char** argv, Config& out, int* exitCode) {
         } else if (a == "--face-cascade") {
             const char* v = need(i); if (!v) return false;
             out.faceCascade = v;
+        } else if (a == "--i2c-bus") {
+            const char* v = need(i); if (!v) return false;
+            out.i2cBus = std::atoi(v);
+        } else if (a == "--battery-address") {
+            const char* v = need(i); if (!v) return false;
+            try {
+                out.batteryAddress = std::stoi(v, nullptr, 0); // accepts 0x.. or decimal
+            } catch (...) {
+                std::cerr << "bad --battery-address (e.g. 0x43): " << v << "\n";
+                *exitCode = 2; return false;
+            }
+        } else if (a == "--no-battery") {
+            out.battery = false;
         } else {
             std::cerr << "unknown option: " << a << " (try --help)\n";
             *exitCode = 2;

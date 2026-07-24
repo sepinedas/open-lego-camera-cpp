@@ -7,6 +7,7 @@
 #include <SDL2/SDL.h>
 #include <opencv2/core.hpp>
 
+#include "battery.hpp"
 #include "camera.hpp"
 #include "config.hpp"
 #include "filters.hpp"
@@ -65,6 +66,8 @@ private:
                   SDL_Color c, bool center);
     void drawGalleryButton(const Button& b, Uint8 alpha); // last-shot thumbnail
     void refreshThumbnail();                              // rebuild after a capture
+    // UPS HAT battery gauge in the top-right corner (skipped when no sensor).
+    void drawBatteryIndicator();
     void dispatch(Action a);
 
     // --- actions ---
@@ -96,6 +99,7 @@ private:
     Recorder recorder_;
     Menu menu_;
     FaceFilter faceFilter_;
+    BatteryMonitor battery_;
 
     SDL_Window* win_ = nullptr;
     SDL_Renderer* ren_ = nullptr;
