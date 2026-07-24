@@ -1,5 +1,6 @@
 #include "config.hpp"
 
+#include <cerrno>
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
@@ -12,6 +13,33 @@ std::string defaultOutputDir() {
     const char* home = std::getenv("HOME");
     std::string base = home ? std::string(home) : std::string(".");
     return base + "/Pictures/open-lego-camera";
+}
+
+// Create `path` and every missing parent (like `mkdir -p`). Returns true when
+// the full directory exists afterwards. A plain ::mkdir only creates the leaf,
+// so on a headless Raspberry Pi OS Lite install (common on the Zero 2 W) where
+// ~/Pictures doesn't exist yet, it fails with ENOENT and captures are silently
+// lost. Desktop images (typical on the Pi 5) ship ~/Pictures via xdg-user-dirs,
+// which is why the single-level mkdir happened to work there.
+bool ensureDir(const std::string& path) {
+    if (path.empty()) return false;
+    std::string partial;
+    partial.reserve(path.size());
+    for (std::size_t i = 0; i < path.size(); ++i) {
+        partial += path[i];
+        const bool atSep = (path[i] == '/');
+        const bool atEnd = (i + 1 == path.size());
+        if ((atSep && partial.size() > 1) || atEnd) {
+            std::string dir = atSep ? partial.substr(0, partial.size() - 1) : partial;
+            if (dir.empty()) continue; // leading '/'
+            if (::mkdir(dir.c_str(), 0755) != 0 && errno != EEXIST) {
+                std::cerr << "could not create directory " << dir << ": "
+                          << std::strerror(errno) << "\n";
+                return false;
+            }
+        }
+    }
+    return true;
 }
 
 static void printUsage(const char* prog) {
@@ -128,8 +156,9 @@ bool parseArgs(int argc, char** argv, Config& out, int* exitCode) {
         }
     }
 
-    // Best-effort create of the output directory (recursively for one level).
-    ::mkdir(out.outputDir.c_str(), 0755);
+    // Create the output directory and any missing parents (e.g. ~/Pictures),
+    // otherwise cv::imwrite has nowhere to write and captures are lost.
+    ensureDir(out.outputDir);
     return true;
 }
 
