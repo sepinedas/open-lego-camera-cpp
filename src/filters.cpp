@@ -199,17 +199,16 @@ void FaceFilter::setCascade(const std::string& path) {
     }
 }
 
-void FaceFilter::detect(const cv::Mat& frame) {
-    cv::Mat gray;
-    cv::cvtColor(frame, gray, cv::COLOR_BGR2GRAY);
-
-    double scale = kDetectWidth / std::max(1, frame.cols);
+void FaceFilter::detectLuma(const cv::Mat& luma) {
+    // `luma` is already single-channel (a grayscale frame, or an NV12 Y plane),
+    // so unlike a BGR frame it needs no colour conversion before detection.
+    double scale = kDetectWidth / std::max(1, luma.cols);
     if (scale > 1.0) scale = 1.0;
     cv::Mat small;
     if (scale < 1.0)
-        cv::resize(gray, small, cv::Size(), scale, scale, cv::INTER_AREA);
+        cv::resize(luma, small, cv::Size(), scale, scale, cv::INTER_AREA);
     else
-        small = gray;
+        small = luma.clone();
     cv::equalizeHist(small, small);
 
     std::vector<cv::Rect> found;
@@ -237,14 +236,68 @@ void FaceFilter::apply(cv::Mat& frame, Filter filter, double phase) {
         return;
     }
 
-    if (frameCount_ % kDetectEvery == 0) detect(frame);
+    if (frameCount_ % kDetectEvery == 0) {
+        cv::Mat gray;
+        cv::cvtColor(frame, gray, cv::COLOR_BGR2GRAY);
+        detectLuma(gray);
+    }
     ++frameCount_;
 
-    for (const cv::Rect& face : faces_) {
-        // Skip faces too small or too near the edge to reshape cleanly.
-        if (face.width < 40 || face.height < 40) continue;
-        if (filter == Filter::BigSmile) applySmile(frame, face);
-        else if (filter == Filter::Crying) applyCry(frame, face, phase);
+    applyRegion(frame, {0, 0}, filter, phase);
+}
+
+void FaceFilter::updateDetection(const cv::Mat& luma) {
+    if (!loaded_ || luma.empty()) {
+        if (!loaded_ && !warned_) {
+            std::cerr << "filters: no face cascade loaded; facial filters "
+                         "disabled. Install `opencv-data` or pass "
+                         "--face-cascade PATH.\n";
+            warned_ = true;
+        }
+        return;
+    }
+    if (frameCount_ % kDetectEvery == 0) detectLuma(luma);
+    ++frameCount_;
+}
+
+cv::Rect FaceFilter::dirtyRegion(Filter filter, int w, int h) const {
+    if (filter == Filter::None || w <= 0 || h <= 0) return cv::Rect();
+
+    // Union the per-face bounding boxes, each grown to cover the warp's
+    // Gaussian falloff (~half a face width) and the tears that fall down the
+    // cheeks below the eyes. One face -> a tight box; several -> a larger box,
+    // still far cheaper than converting the whole frame.
+    cv::Rect uni;
+    for (const cv::Rect& f : faces_) {
+        if (f.width < 40 || f.height < 40) continue;
+        int mx = std::max(8, f.width * 2 / 5);
+        int mtop = std::max(6, f.height * 3 / 10);
+        int mbot = std::max(8, f.height / 2);
+        cv::Rect r(f.x - mx, f.y - mtop, f.width + 2 * mx, f.height + mtop + mbot);
+        uni = (uni.area() == 0) ? r : (uni | r);
+    }
+    uni &= cv::Rect(0, 0, w, h);
+    if (uni.area() == 0) return cv::Rect();
+
+    // Snap to an even grid so the crop lines up with NV12's 2x2 chroma plane.
+    int x0 = uni.x & ~1, y0 = uni.y & ~1;
+    int x1 = (uni.x + uni.width) & ~1, y1 = (uni.y + uni.height) & ~1;
+    if (x1 - x0 < 4 || y1 - y0 < 4) return cv::Rect();
+    return cv::Rect(x0, y0, x1 - x0, y1 - y0);
+}
+
+void FaceFilter::applyRegion(cv::Mat& roi, cv::Point origin, Filter filter,
+                             double phase) {
+    if (filter == Filter::None || roi.empty() || roi.type() != CV_8UC3) return;
+    for (const cv::Rect& faceFrame : faces_) {
+        // Skip faces too small to reshape cleanly.
+        if (faceFrame.width < 40 || faceFrame.height < 40) continue;
+        // Face rect in roi-local coords. The reshaping helpers clip to roi's
+        // bounds, so a face only partly inside the region is handled safely.
+        cv::Rect face(faceFrame.x - origin.x, faceFrame.y - origin.y,
+                      faceFrame.width, faceFrame.height);
+        if (filter == Filter::BigSmile) applySmile(roi, face);
+        else if (filter == Filter::Crying) applyCry(roi, face, phase);
     }
 }
 

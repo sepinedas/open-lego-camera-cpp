@@ -104,8 +104,16 @@ texture — instead of spending a CPU core on a per-frame `videoconvert`. Pinch
 Zero 2 W, where the CPU colour-convert was the frame-rate bottleneck.
 
 A frame is only converted to BGR on the CPU when something actually needs the
-pixels — taking a photo, recording, or an active facial filter — so the common
-"just previewing" case does no colour conversion or resize on the CPU at all.
+pixels — taking a photo or recording — so the common "just previewing" case
+does no colour conversion or resize on the CPU at all.
+
+The **facial filters** stay on that fast path too. Face detection runs directly
+on the NV12 **Y (luma) plane** — which _is_ a grayscale image — so it needs no
+conversion, and only the **face region** is converted to BGR, reshaped, and
+re-encoded back into the NV12 frame. The GPU still converts and zooms the whole
+frame, so filtering costs work proportional to the face's size on screen rather
+than a full-frame convert every frame. (A USB webcam, which delivers BGR, still
+converts the whole frame for filters.)
 
 If the renderer can't sample NV12 textures, or raw NV12 capture won't start, the
 app transparently falls back to converting to BGR with libcamera's

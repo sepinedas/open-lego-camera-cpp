@@ -44,10 +44,26 @@ public:
     // valid for chroma-subsampled (NV12) buffers too.
     cv::Rect zoomSrcRect(int w, int h) const;
 
-    // Materialise a full-size BGR frame from a native frame with the current
-    // zoom applied -- for photo capture, recording and the facial filters, all
-    // of which need BGR. Not on the preview hot path.
+    // Convert a native frame to a full-size BGR frame, *without* zoom. Used as
+    // the first step for capture/record, which need real BGR pixels.
+    cv::Mat nativeToBGR(const cv::Mat& native) const;
+
+    // Apply the current digital zoom to a BGR frame in place (centred crop
+    // scaled back to full size). No-op when not zoomed.
+    void cropZoom(cv::Mat& bgr) const;
+
+    // Materialise a full-size, zoomed BGR frame from a native frame. Equivalent
+    // to nativeToBGR() followed by cropZoom(). Not on the preview hot path.
     cv::Mat toDisplayBGR(const cv::Mat& native) const;
+
+    // Crop an even-aligned region out of an NV12 buffer and convert just that
+    // region to BGR (no full-frame conversion). `nv12` is a height*3/2 x width
+    // single-channel buffer; `r` is in luma pixels, even on all sides.
+    static cv::Mat nv12CropToBGR(const cv::Mat& nv12, const cv::Rect& r);
+
+    // Encode a BGR region back into `nv12` at `at` (even coords), writing both
+    // the Y and the 2x2-subsampled UV planes. Inverse of nv12CropToBGR().
+    static void bgrIntoNV12(const cv::Mat& bgr, cv::Mat& nv12, cv::Point at);
 
     void zoomIn();
     void zoomOut();

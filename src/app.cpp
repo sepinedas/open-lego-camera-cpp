@@ -590,12 +590,13 @@ void App::capturePhoto() {
     // Guard against the output dir having gone missing since startup (e.g. an
     // unmounted SD/USB path) so the write below can actually land.
     ensureDir(cfg_.outputDir);
-    // Materialise the zoomed BGR frame on demand (the preview kept it in the
-    // camera's native format), then apply the active filter so the saved photo
-    // matches what's on screen.
-    cv::Mat shot = cam_->toDisplayBGR(lastNative_);
-    faceFilter_.apply(shot, filter_, filterPhase_);
+    // Materialise a BGR frame on demand (the preview kept it in the camera's
+    // native format). Reshape at full resolution, then zoom -- the same order as
+    // the preview -- so the saved photo matches what's on screen.
+    cv::Mat shot = cam_->nativeToBGR(lastNative_);
     if (shot.empty()) return;
+    faceFilter_.apply(shot, filter_, filterPhase_);
+    cam_->cropZoom(shot);
     std::string path = timestampName("IMG", ".jpg");
     bool ok = false;
     try {
@@ -667,26 +668,31 @@ void App::renderCamera() {
     cv::Mat frame;
     if (cam_->read(frame)) lastNative_ = frame; // camera-native, no zoom applied
 
-    // Only materialise a BGR frame when something needs the actual pixels: an
-    // active facial filter (which warps them) or recording (which writes them).
-    // The ordinary preview case skips every per-frame CPU colour-convert and
-    // resize, letting the GPU do YUV->RGB and the zoom crop instead. When a
-    // filter is on, the reshape happens before preview/capture/record so photos
-    // and videos carry the same expression.
-    const bool needBGR = (filter_ != Filter::None) || recorder_.recording();
-    cv::Mat processed;
-    if (needBGR && !lastNative_.empty()) {
-        processed = cam_->toDisplayBGR(lastNative_);
-        faceFilter_.apply(processed, filter_, filterPhase_);
-    }
-    if (filter_ != Filter::None) filterPhase_ += 1.0;
-
-    if (recorder_.recording()) recorder_.writeFrame(processed);
+    const bool recording = recorder_.recording();
+    const bool filtering = (filter_ != Filter::None);
+    // An NV12 frame can be filtered without a full-frame CPU convert -- only the
+    // face region is reshaped and re-encoded, the GPU converts and zooms the
+    // rest (see renderFilteredNV12). A BGR webcam, a renderer without NV12
+    // textures, or recording (which needs the whole frame as BGR to write) all
+    // fall back to converting the full frame.
+    const bool nv12FilterPath = filtering && !recording &&
+                                cam_->format() == PixelFormat::NV12 &&
+                                !nv12Unsupported_ && !lastNative_.empty();
 
     beginFrame();
-    if (!processed.empty()) {
-        renderMat(processed); // already zoomed + filtered
+    if (recording || (filtering && !nv12FilterPath)) {
+        // Full-resolution BGR: convert, reshape the face, then zoom. The filter
+        // runs before the zoom crop, matching the NV12 preview path so a photo
+        // or recording carries exactly the expression shown on screen.
+        cv::Mat bgr = cam_->nativeToBGR(lastNative_);
+        faceFilter_.apply(bgr, filter_, filterPhase_);
+        cam_->cropZoom(bgr);
+        if (recording) recorder_.writeFrame(bgr);
+        renderMat(bgr);
+    } else if (nv12FilterPath) {
+        renderFilteredNV12();
     } else if (!lastNative_.empty()) {
+        // Pure preview: no CPU colour-convert or resize at all.
         clear();
         cv::Rect zr = cam_->zoomSrcRect(cam_->width(), cam_->height());
         SDL_Rect z{zr.x, zr.y, zr.width, zr.height};
@@ -695,6 +701,8 @@ void App::renderCamera() {
     } else {
         clear();
     }
+
+    if (filter_ != Filter::None) filterPhase_ += 1.0;
 
     // Persistent recording indicator (independent of the menu fade).
     if (recorder_.recording()) {
@@ -753,6 +761,37 @@ void App::renderCamera() {
         }
     }
     present();
+}
+
+// Filtered preview that keeps the frame in NV12. Detection runs on the Y plane
+// (already a luma image, so no colour convert), and only the face region is
+// converted to BGR, reshaped, and re-encoded back into a private NV12 copy. The
+// GPU then does the YUV->RGB conversion and the zoom crop for the whole frame,
+// exactly as on the unfiltered fast path -- so turning a filter on no longer
+// forces a full-frame CPU convert every frame.
+void App::renderFilteredNV12() {
+    const int W = cam_->width(), H = cam_->height();
+    faceFilter_.updateDetection(lastNative_.rowRange(0, H)); // Y plane == luma
+    cv::Rect region = faceFilter_.dirtyRegion(filter_, W, H);
+
+    clear();
+    cv::Rect zr = cam_->zoomSrcRect(W, H);
+    SDL_Rect z{zr.x, zr.y, zr.width, zr.height};
+    const SDL_Rect* zp = cam_->zoomed() ? &z : nullptr;
+
+    if (region.area() == 0) {
+        // No face in view: nothing to reshape, so stay on the pure fast path.
+        blitCamera(lastNative_, PixelFormat::NV12, W, H, zp);
+        return;
+    }
+
+    // Reshape the region on a private copy so the shared capture buffer (used by
+    // stills) is never mutated, then upload the whole NV12 once.
+    lastNative_.copyTo(filteredNative_);
+    cv::Mat roi = Camera::nv12CropToBGR(filteredNative_, region);
+    faceFilter_.applyRegion(roi, region.tl(), filter_, filterPhase_);
+    Camera::bgrIntoNV12(roi, filteredNative_, region.tl());
+    blitCamera(filteredNative_, PixelFormat::NV12, W, H, zp);
 }
 
 void App::ensureGalleryImage() {

@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <iostream>
 #include <thread>
+#include <vector>
 
 #include <opencv2/imgproc.hpp>
 
@@ -183,23 +184,73 @@ cv::Rect Camera::zoomSrcRect(int w, int h) const {
     return cv::Rect(x, y, cw, ch);
 }
 
-// Digital zoom for capture/record/filters: convert to BGR (if needed), crop the
-// centred window and scale it back to the full frame. Uniform across backends
-// so a saved photo matches the zoomed preview exactly.
-cv::Mat Camera::toDisplayBGR(const cv::Mat& native) const {
+// Convert a native frame to full-size BGR, no zoom. The clone for an
+// already-BGR source hands callers their own buffer to mutate (the filters do).
+cv::Mat Camera::nativeToBGR(const cv::Mat& native) const {
     cv::Mat bgr;
     if (native.empty()) return bgr;
     if (format_ == PixelFormat::NV12)
         cv::cvtColor(native, bgr, cv::COLOR_YUV2BGR_NV12);
     else
-        bgr = native.clone(); // own the pixels: callers (filters) mutate them
-    if (zoom_ > 1.001) {
-        cv::Rect roi = zoomSrcRect(bgr.cols, bgr.rows);
-        cv::Mat zoomed;
-        cv::resize(bgr(roi), zoomed, bgr.size(), 0, 0, cv::INTER_LINEAR);
-        bgr = zoomed;
-    }
+        bgr = native.clone();
     return bgr;
+}
+
+// Digital zoom on a BGR frame: crop the centred window and scale it back to the
+// full frame. Uniform across backends so a saved photo matches the preview.
+void Camera::cropZoom(cv::Mat& bgr) const {
+    if (zoom_ <= 1.001 || bgr.empty()) return;
+    cv::Rect roi = zoomSrcRect(bgr.cols, bgr.rows);
+    cv::Mat zoomed;
+    cv::resize(bgr(roi), zoomed, bgr.size(), 0, 0, cv::INTER_LINEAR);
+    bgr = zoomed;
+}
+
+cv::Mat Camera::toDisplayBGR(const cv::Mat& native) const {
+    cv::Mat bgr = nativeToBGR(native);
+    cropZoom(bgr);
+    return bgr;
+}
+
+// Assemble a contiguous NV12 sub-buffer for `r` (Y block + matching UV block),
+// then convert it to BGR. Keeps colour conversion proportional to the region
+// instead of the whole frame.
+cv::Mat Camera::nv12CropToBGR(const cv::Mat& nv12, const cv::Rect& r) {
+    const int H = nv12.rows * 2 / 3;
+    cv::Mat roi(r.height * 3 / 2, r.width, CV_8UC1);
+    // Y plane: rows [r.y, r.y+r.height).
+    nv12(cv::Rect(r.x, r.y, r.width, r.height))
+        .copyTo(roi(cv::Rect(0, 0, r.width, r.height)));
+    // Interleaved UV plane: it lives below the Y plane (starting at row H) at
+    // half the vertical resolution; the chroma for luma column x sits at byte
+    // column x, so the region's byte columns match the Y region's.
+    nv12(cv::Rect(r.x, H + r.y / 2, r.width, r.height / 2))
+        .copyTo(roi(cv::Rect(0, r.height, r.width, r.height / 2)));
+    cv::Mat bgr;
+    cv::cvtColor(roi, bgr, cv::COLOR_YUV2BGR_NV12);
+    return bgr;
+}
+
+// Inverse of nv12CropToBGR: write a filtered BGR region back into the NV12
+// buffer, re-deriving the Y plane and the 2x2-averaged UV plane.
+void Camera::bgrIntoNV12(const cv::Mat& bgr, cv::Mat& nv12, cv::Point at) {
+    if (bgr.empty() || bgr.type() != CV_8UC3) return;
+    const int H = nv12.rows * 2 / 3;
+    cv::Mat yuv;
+    cv::cvtColor(bgr, yuv, cv::COLOR_BGR2YUV); // BT.601, matching YUV2BGR_NV12
+    cv::Mat ch[3];
+    cv::split(yuv, ch);
+    // Y plane straight in.
+    ch[0].copyTo(nv12(cv::Rect(at.x, at.y, bgr.cols, bgr.rows)));
+    // U and V averaged down 2x (INTER_AREA) and interleaved into UV bytes.
+    cv::Mat u2, v2;
+    cv::resize(ch[1], u2, cv::Size(bgr.cols / 2, bgr.rows / 2), 0, 0, cv::INTER_AREA);
+    cv::resize(ch[2], v2, cv::Size(bgr.cols / 2, bgr.rows / 2), 0, 0, cv::INTER_AREA);
+    std::vector<cv::Mat> planes{u2, v2};
+    cv::Mat uv;
+    cv::merge(planes, uv);                  // CV_8UC2, UVUV interleaved
+    cv::Mat uvBytes = uv.reshape(1, u2.rows); // CV_8UC1, width == bgr.cols
+    uvBytes.copyTo(nv12(cv::Rect(at.x, H + at.y / 2, bgr.cols, bgr.rows / 2)));
 }
 
 bool Camera::read(cv::Mat& frame) {

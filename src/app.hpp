@@ -74,6 +74,9 @@ private:
 
     // --- per-mode rendering ---
     void renderCamera();
+    // Preview with a facial filter while keeping the frame in NV12: reshape only
+    // the face region(s) on the CPU and let the GPU convert and zoom the rest.
+    void renderFilteredNV12();
     void renderGallery();
     void ensureGalleryImage();
     std::string timestampName(const char* prefix, const char* ext) const;
@@ -106,6 +109,7 @@ private:
     Uint32 filterLabelUntil_ = 0;   // show the filter name briefly after a change
 
     cv::Mat lastNative_;       // most recent live frame, camera-native format
+    cv::Mat filteredNative_;   // NV12 copy with the face region reshaped in place
     cv::Mat galleryMat_;       // decoded image/thumbnail currently shown
     std::string galleryShown_; // path backing galleryMat_
 
